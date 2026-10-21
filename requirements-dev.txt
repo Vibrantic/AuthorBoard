@@ -1,0 +1,4 @@
+# Needed only to build the developer documentation (mkdocs serve / mkdocs build)
+mkdocs>=1.5,<2
+mkdocs-material>=9.5
+mkdocstrings[python]>=0.24

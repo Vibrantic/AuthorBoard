@@ -1,0 +1,62 @@
+site_name: AuthorBoard - Developer Documentation
+site_description: How AuthorBoard works under the hood
+repo_name: AuthorBoard
+docs_dir: docs
+theme:
+  name: material
+  palette:
+    scheme: slate
+    primary: indigo
+    accent: blue
+  features:
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - content.code.copy
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [.]
+          options:
+            show_source: true
+            show_root_heading: true
+            heading_level: 3
+            docstring_style: google
+            members_order: source
+            show_signature_annotations: false
+markdown_extensions:
+  - admonition
+  - tables
+  - attr_list
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+nav:
+  - Home: index.md
+  - Architecture:
+      - Overview: architecture/overview.md
+      - Data model & file format: architecture/data-model.md
+      - Main window & lifecycle: architecture/main-window.md
+      - The board (scene & items): architecture/board.md
+      - Rich text, comments, spelling: architecture/rich-text.md
+      - Bookshelf & library: architecture/library-shelf.md
+      - Undo, saving, backups: architecture/undo-save.md
+      - Internationalisation: architecture/i18n.md
+  - Guides:
+      - Development setup: guides/development.md
+      - Extending AuthorBoard: guides/extending.md
+      - Qt lessons & pitfalls: guides/qt-pitfalls.md
+  - API reference:
+      - reference/index.md
+      - Core data: reference/core.md
+      - Board: reference/board.md
+      - Editing: reference/editing.md
+      - Library & shelf: reference/library.md
+      - Application: reference/app.md
