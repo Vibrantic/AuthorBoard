@@ -463,5 +463,10 @@
   "Mausrad: Zoom  ·  Ziehen: verschieben  ·  Doppelklick: alles anzeigen": "Mouse wheel: zoom  ·  Drag: pan  ·  Double-click: show all",
   "{n} Notizen ohne Datum": "{n} notes without a date",
   "Beschriftung immer anzeigen": "Always show label",
-  "Ziehen, um die Höhe der Liste zu ändern": "Drag to change the height of the list"
+  "Ziehen, um die Höhe der Liste zu ändern": "Drag to change the height of the list",
+  "Entwicklung": "Development",
+  "AuthorBoard entstand in einer fortlaufenden Zusammenarbeit zwischen einem menschlichen Maintainer und zwei KI-Assistenten: <b>Konzept, Richtung und Übersicht</b> durch die Autorinnen und Autoren des Projekts, <b>erste Umsetzung, Architektur, Handbuch und Beispielprojekte</b> durch <b>Claude</b> (Anthropic), <b>Performance-Arbeit, Level-of-Detail-Rendering, Zeitleisten-Neufassung, Undo-Umbau und Fehlerbehebungen</b> durch <b>DeepSeek</b>.": "AuthorBoard was built in an ongoing collaboration between a human maintainer and two AI assistants: <b>concept, direction and oversight</b> by the project's authors, <b>initial implementation, architecture, user manual and showcase</b> by <b>Claude</b> (Anthropic), <b>performance work, level-of-detail rendering, timeline rewrite, undo restructuring and bug fixes</b> by <b>DeepSeek</b>.",
+  "Jede Funktion, jedes Layout und jede Leistungsverbesserung wurde vom Maintainer angestoßen, ausprobiert und abgenommen. Die Umsetzung entstand im Dialog mit diesem Feedback und wurde nach jedem Schritt geprüft – von der ersten Veröffentlichung über die Leistungsüberarbeitung bis zu den letzten Detailkorrekturen.": "Every feature, every layout decision and every performance improvement was proposed, tried and signed off by the maintainer. The implementation was produced in dialogue with that feedback and checked after every step – from the initial release through the performance overhaul to the final polish.",
+  "Danksagung": "Acknowledgements",
+  "Dank an alle, die AuthorBoard ausprobiert, Fehler gemeldet und Verbesserungen vorgeschlagen haben. Die Projektgeschichte ist im Git-Verlauf einsehbar.": "Thanks to everyone who tried AuthorBoard, reported bugs and suggested improvements. The project history is visible in the git log."
 }

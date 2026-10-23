@@ -100,11 +100,13 @@ class AboutDialog(QDialog):
         return (
             f"<p>{tr('Notizbücher für Autorinnen und Autoren: ein Bücherregal, ein Korkboard mit Post-its, Pins und Fäden, Zeitleiste, Rich-Text-Editor mit Kommentaren und vieles mehr.')}</p>"
             + h(tr("Entwicklung"))
-            + f"<p>{tr('AuthorBoard wurde von <b>Claude</b> entworfen, programmiert, getestet und dokumentiert – einem KI-Assistenten von Anthropic.')}</p>"
+            + f"<p>{tr('AuthorBoard entstand in einer fortlaufenden Zusammenarbeit zwischen einem menschlichen Maintainer und zwei KI-Assistenten: <b>Konzept, Richtung und Übersicht</b> durch die Autorinnen und Autoren des Projekts, <b>erste Umsetzung, Architektur, Handbuch und Beispielprojekte</b> durch <b>Claude</b> (Anthropic), <b>Performance-Arbeit, Level-of-Detail-Rendering, Zeitleisten-Neufassung, Undo-Umbau und Fehlerbehebungen</b> durch <b>DeepSeek</b>.')}</p>"
             + h(tr("Wie es entstanden ist"))
-            + f"<p>{tr('Die Software ist in einem fortlaufenden Dialog entstanden: Funktionen wurden schrittweise geplant, in Python mit Qt (PySide6) umgesetzt und nach jedem Schritt mit automatisierten Testläufen geprüft. Auch die Dokumentation, die Übersetzungen (Deutsch/Englisch) und die Beispielprojekte stammen von Claude.')}</p>"
+            + f"<p>{tr('Jede Funktion, jedes Layout und jede Leistungsverbesserung wurde vom Maintainer angestoßen, ausprobiert und abgenommen. Die Umsetzung entstand im Dialog mit diesem Feedback und wurde nach jedem Schritt geprüft – von der ersten Veröffentlichung über die Leistungsüberarbeitung bis zu den letzten Detailkorrekturen.')}</p>"
             + h(tr("Technik"))
             + "<p>Python 3 · Qt 6 (PySide6) · pyspellchecker</p>"
+            + h(tr("Danksagung"))
+            + f"<p>{tr('Dank an alle, die AuthorBoard ausprobiert, Fehler gemeldet und Verbesserungen vorgeschlagen haben. Die Projektgeschichte ist im Git-Verlauf einsehbar.')}</p>"
             + h(tr("Lizenz"))
             + f"<p>{tr('Dieses Programm ist freie Software: Sie können es unter den Bedingungen der GNU General Public License, wie von der Free Software Foundation veröffentlicht, weitergeben und/oder verändern – Version 3 der Lizenz oder (nach Ihrer Wahl) jede spätere Version.')}</p>"
             + f"<p>{tr('Dieses Programm wird in der Hoffnung verbreitet, dass es nützlich ist, aber OHNE JEDE GEWÄHRLEISTUNG – sogar ohne die implizite Gewährleistung der MARKTFÄHIGKEIT oder EIGNUNG FÜR EINEN BESTIMMTEN ZWECK.')}</p>"
