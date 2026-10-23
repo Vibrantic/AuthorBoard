@@ -39,24 +39,26 @@
 **Plot on a board**
 - 🗒 **Sticky notes** with types (character, place, chapter, scene, event, plot, item, idea, research, ...), status dots, tags, free attributes and a content preview.
 - 📌 **Pins and threads** - connect pins by dragging with the right mouse button; coloured, labelled threads ("brother of") run *in front* of the notes and fade where they cross a note.
+- 🎚 **Adaptive thread visibility** - when zoomed out, threads are hidden by default to keep the board readable; select a note to reveal its connected threads. Threads connected to the selection stay visible and clickable at any zoom. On very large boards threads render as simple strokes.
 - 🔒 **Locking** - lock notes so they stay in place; lock pins so they cannot be dragged inside a note but still follow it.
 - 🎯 **Focus mode** - select a note and everything not connected to it is greyed out.
 - 🔎 **Search & filters** - full text, `#tags`, note type, status; the board dims what does not match.
 - 🧩 **Custom note types** - per notebook or global for all notebooks (Settings).
 - 🏷 **Tag auto-completion** that remembers the tags of each book.
+- 🚀 **Scales to large boards** - the renderer picks a level of detail per item from the current zoom and the number of visible notes, threads and pins, so panning and zooming stay responsive on boards with thousands of notes and threads.
 
 **Write**
 - ✍️ **Full-size rich-text editor** - fonts, bold / italic / underline / strike-through, text colour, highlighter, alignment, lists, **links that open in the web browser** (Ctrl+click) and **images**.
-- 💬 **Comments** on words or sentences with a hover pop-up, a **Comments tab** that lists all comments (double-click jumps to the words) and deletion.
+- 💬 **Comments** on words or sentences with a hover pop-up and a **Comments tab** that lists every comment. A single click in the tab selects and centres the note that holds the comment; a double click opens the editor and jumps to the commented words.
 - 📎 **Attachments** - attach any file or image to a note; everything is stored inside the notebook file.
 - ✅ **Spell checking** for **English and German** with suggestions and a user dictionary.
 
 **See the story**
-- 🕒 **Horizontal timeline** - dots in the colour of the note, information bubble on click, zoom and pan.
+- 🕒 **Horizontal timeline** - dots in the colour of the note, information bubble on click, zoom and pan. Smooth on boards with thousands of dated notes.
 - 📊 **Statistics** - words per note type, status, tags, longest and most connected notes, daily progress.
 
 **Stay safe**
-- ↩️ **Undo / redo** for everything, a **save prompt** for unsaved changes, **autosave** with crash recovery and automatic **backups**.
+- ↩️ **Undo / redo** for everything, a **save prompt** for unsaved changes, **autosave** with crash recovery (written off the UI thread) and automatic **backups**.
 - 📤 **Export** - manuscript (Markdown, text, HTML, **PDF**; HTML/PDF keep formatting and images), outline as Markdown, board as PNG.
 - 🌍 **Two languages (English / Deutsch)** switchable at runtime and easy to extend.
 - 📖 **Built-in searchable documentation** (F1).
@@ -194,4 +196,30 @@ This software is provided **"as is"**, without warranty of any kind. Use it at y
 
 ## Credits
 
-AuthorBoard was designed, programmed, tested and documented by **Claude**, an AI assistant made by [Anthropic](https://www.anthropic.com), in an iterative conversation. Built with [Python](https://www.python.org), [Qt for Python (PySide6)](https://doc.qt.io/qtforpython/) and [pyspellchecker](https://github.com/barrust/pyspellchecker).
+AuthorBoard was made in an iterative collaboration between a human and two AI
+assistants:
+
+- **Concept, direction and oversight — *Vibrantic***
+  Every feature, layout decision, bug report and performance target came from the
+  human maintainer: what to build, what to keep, what to cut, and when a fix was
+  good enough. Design decisions, UX testing, bug reproduction, performance
+  profiling on real hardware, and final review of every change.
+
+- **Initial implementation, architecture, user manual and showcase —
+  *Claude***, an AI assistant made by [Anthropic](https://www.anthropic.com).
+  Source code of the original 1.0 release, automated tests, developer
+  documentation, translations, and the showcase project were written in an
+  ongoing conversation with the maintainer, driven by their feedback at each step.
+
+- **Performance work, LOD rendering, timeline rewrite, undo restructuring, and
+  bug fixes — *DeepSeek***, an AI assistant made by
+  [DeepSeek](https://www.deepseek.com). The performance overhaul (level-of-detail
+  tiers for notes, threads and pins; viewport culling; off-thread autosave;
+  structural-sharing undo snapshots; the O(N) timeline), the adaptive
+  thread-visibility rules, the comment-click and focus-mode fixes, and the
+  cursor-handling work were implemented in this codebase and reviewed by the
+  maintainer at every step.
+
+Built with [Python](https://www.python.org),
+[Qt for Python (PySide6)](https://doc.qt.io/qtforpython/) and
+[pyspellchecker](https://github.com/barrust/pyspellchecker).
