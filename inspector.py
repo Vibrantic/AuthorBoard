@@ -79,6 +79,8 @@ class InspectorWidget(QWidget):
 
         self.build_ui()
         self.set_note(None)
+        self._links_cache_key = None
+        self._links_cache_value = None
 
     # Fixed size hints: the dock must not change width when a note is
     # (de)selected, otherwise the board would shift under the mouse.
@@ -386,6 +388,7 @@ class InspectorWidget(QWidget):
         """Common tail of every edit: repaint the note and notify the window."""
         if self._loading or self.note is None:
             return
+        self.note.model.touch()      # bump revision, drop word cache
         self.note.update()
         self.note_modified.emit(self.note)
 
@@ -627,30 +630,59 @@ class InspectorWidget(QWidget):
     # ---- connections
 
     def refresh_links(self):
-        """Collect threads and text mentions of the current note, then filter."""
+        """Collect threads and text mentions of the current note.
 
+        Optimized: the thread list comes from ``note.links()`` (cheap, only
+        that note's pins), and the mention list depends only on the current
+        note's title/content plus the scene's overall content — the latter
+        is captured by ``scene._mentions_revision``.  If neither has changed
+        since the last call, reuse the cached result."""
+        if self.note is None:
+            self._links_all = []
+            self._links_cache_key = None
+            self._links_cache_value = None
+            self.apply_links_filter()
+            return
+
+        scene = self.note.scene()
+        revision = getattr(scene, "_mentions_revision", 0) if scene is not None else 0
+        key = (self.note.model.id, revision)
+
+        if (self._links_cache_key == key
+                and self._links_cache_value is not None):
+            self._links_all = self._links_cache_value
+            self.apply_links_filter()
+            return
+
+        # ---- Cold path: recompute ----
         self._links_all = []
 
-        if self.note is not None:
-            # 1) threads
-            for other, label in self.note.links():
-                self._links_all.append(("thread", other, label))
+        # 1) Threads — cheap, always fresh.
+        for other, label in self.note.links():
+            self._links_all.append(("thread", other, label))
 
-            # 2) mentions: a note's title appears in another note's text
-            scene = self.note.scene()
-            if scene is not None:
-                generic = {t.label.lower() for t in getattr(scene, "note_types", {}).values()}
-                mine = self.note.model.title.strip().lower()
-                my_text = self.note.model.content.lower()
-                for other in list(scene.note_lookup.values()):
-                    if other is self.note:
-                        continue
-                    ot = other.model.title.strip().lower()
-                    if len(mine) >= 3 and mine not in generic \
-                            and mine in other.model.content.lower():
-                        self._links_all.append(("in", other, ""))
-                    if len(ot) >= 3 and ot not in generic and ot in my_text:
-                        self._links_all.append(("out", other, ""))
+        # 2) Mentions — only if the list is visible.
+        if not self.links_list.isVisibleTo(self):
+            self.apply_links_filter()
+            return
+
+        if scene is not None:
+            generic = {t.label.lower()
+                       for t in getattr(scene, "note_types", {}).values()}
+            mine = self.note.model.title.strip().lower()
+            my_text = self.note.model.content.lower()
+            for other in list(scene.note_lookup.values()):
+                if other is self.note:
+                    continue
+                ot = other.model.title.strip().lower()
+                if (len(mine) >= 3 and mine not in generic
+                        and mine in other.model.content.lower()):
+                    self._links_all.append(("in", other, ""))
+                if len(ot) >= 3 and ot not in generic and ot in my_text:
+                    self._links_all.append(("out", other, ""))
+
+        self._links_cache_key = key
+        self._links_cache_value = list(self._links_all)
 
         self.apply_links_filter()
 

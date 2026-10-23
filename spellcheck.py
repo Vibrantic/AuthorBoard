@@ -35,12 +35,13 @@ class SpellEngine:
 
     def __init__(self):
         """Create the engine (dictionaries are loaded lazily)."""
-        self._checkers = {}        # language code -> SpellChecker
-        self._cache = {}           # (lang, word) -> bool (True = misspelled)
-        self.book_words = set()    # vocabulary of the open book (lower-case)
-        self.ignored = set()       # ignored for this session (lower-case)
-
-    # -------------------------------------------------------- availability
+        self._checkers = {}
+        self._cache = {}
+        self.book_words = set()
+        self.ignored = set()
+        # Cached lowercase user-word set (Optimization.md 2.4)
+        self._user_words_set = None
+        self._user_words_snapshot = None
 
     @staticmethod
     def available():
@@ -68,7 +69,15 @@ class SpellEngine:
             self._checkers[lang] = SpellChecker(language=lang)
         return self._checkers[lang]
 
-    # ------------------------------------------------------------- queries
+    def _user_words(self):
+        """Return the cached lowercase set of user words."""
+        words = settings.get("user_words") or []
+        # Cheap change detection: length + first/last item
+        sig = (len(words), words[0] if words else None, words[-1] if words else None)
+        if self._user_words_set is None or self._user_words_snapshot != sig:
+            self._user_words_set = {w.lower() for w in words}
+            self._user_words_snapshot = sig
+        return self._user_words_set
 
     def is_misspelled(self, word):
         """True when ``word`` is unknown in the active language."""
@@ -79,12 +88,12 @@ class SpellEngine:
         w = word.lower().replace("’", "'")
         if len(w) < 2 or w in self.ignored or w in self.book_words:
             return False
-        if w in {u.lower() for u in settings.get("user_words")}:
+        if w in self._user_words():
             return False
 
         key = (lang, w)
         if key not in self._cache:
-            base = w[:-2] if w.endswith("'s") else w     # possessive "Mira's"
+            base = w[:-2] if w.endswith("'s") else w
             self._cache[key] = not self._checker(lang).known([base])
         return self._cache[key]
 
@@ -106,25 +115,20 @@ class SpellEngine:
             out.append(c)
         return out
 
-    # ------------------------------------------------------ dictionaries
-
+    # add_to_dictionary / remove_from_dictionary: also clear the cache of the set
     def add_to_dictionary(self, word):
-        """Remember a word permanently."""
         words = list(settings.get("user_words"))
         if word.lower() not in {w.lower() for w in words}:
             words.append(word)
             settings.set("user_words", words)
+        self._user_words_set = None
         self._cache.clear()
 
     def remove_from_dictionary(self, word):
-        """Forget a user word."""
         words = [w for w in settings.get("user_words") if w != word]
         settings.set("user_words", words)
+        self._user_words_set = None
         self._cache.clear()
-
-    def ignore(self, word):
-        """Ignore a word until the program is closed."""
-        self.ignored.add(word.lower())
 
     def set_book_words(self, words):
         """Replace the book vocabulary (note titles, tags)."""
@@ -136,10 +140,13 @@ class SpellEngine:
             self.book_words = vocab
             self._cache.clear()
 
+    def ignore(self, word):
+        """Ignore a word until the program is closed."""
+        self.ignored.add(word.lower())
+
     def clear_cache(self):
         """Forget cached results (after a setting change)."""
         self._cache.clear()
-
 
 # Shared engine instance
 engine = SpellEngine()

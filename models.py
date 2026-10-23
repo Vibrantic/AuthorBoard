@@ -147,6 +147,20 @@ class NoteData:
     attachments: List[AttachmentData] = field(default_factory=list)
     comments: List[CommentData] = field(default_factory=list)
 
+    # ---- Caches (not serialised, recomputed on load) ----
+    # Word count of ``content`` (None = not computed yet).
+    _word_cache: int = field(default=None, repr=False, compare=False)
+    # Bumped whenever the model changes; used by the incremental tree.
+    _revision: int = field(default=0, repr=False, compare=False)
+
+    def touch(self):
+        """Mark the model as changed: bump the revision, drop caches.
+
+        Called by ``NoteItem.model_changed``.  UI code that mutates the model
+        directly (e.g. inspector, dialog) should call this too, otherwise
+        caches keyed on ``_revision`` will be stale."""
+        self._revision += 1
+        self._word_cache = None
 
 @dataclass
 class ConnectionData:
@@ -204,6 +218,15 @@ def note_matches(note: NoteData, text: str = "", type_key: str = "",
 def count_words(text: str) -> int:
     """Number of whitespace separated words."""
     return len(text.split())
+
+
+def note_word_count(note: NoteData) -> int:
+    """Word count of ``note.content``, cached on the note.
+
+    Cleared by ``NoteData.touch()``."""
+    if note._word_cache is None:
+        note._word_cache = count_words(note.content)
+    return note._word_cache
 
 
 _ATTR_SYNONYMS = {

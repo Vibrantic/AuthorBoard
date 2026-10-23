@@ -38,9 +38,12 @@ from PySide6.QtCore import (
     QRectF,
     QSettings,
     Qt,
+    QThreadPool,
     QTimer,
     QTranslator,
+    QRunnable,
 )
+
 from PySide6.QtGui import (
     QAction,
     QActionGroup,
@@ -85,6 +88,7 @@ from models import (
     ProjectData,
     count_words,
     note_timeline_key,
+    note_word_count,
 )
 from storage import Storage
 from attachments import AttachmentStore
@@ -95,7 +99,7 @@ from comments_panel import CommentsPanel, RightPanel
 from settings_dialog import SettingsDialog
 from help_dialog import HelpDialog
 from about_dialog import AboutDialog
-from undo import UndoStack
+from undo import Snapshot, UndoStack
 from export import build_markdown
 from canvas import BoardScene, BoardView
 from note_item import NoteItem
@@ -122,6 +126,7 @@ from theme import (
 )
 import i18n
 from i18n import tr, N_
+from storage import FORMAT_VERSION, Storage
 
 SETTINGS_ORG = "AuthorBoard"
 SETTINGS_APP = "AuthorBoard"
@@ -167,6 +172,35 @@ RECOVERY_PATH = os.path.join(os.path.expanduser("~"), ".authorboard_recovery.jso
 AUTOSAVE_INTERVAL_MS = 120_000
 
 
+class _AutosaveWorker(QRunnable):
+    """Write an autosave file on a worker thread.
+
+    The dict is built on the UI thread (it reads the scene) and passed here
+    as plain Python data — no Qt objects, no scene references.  The write is
+    atomic (tmp + os.replace) so a crash or a mid-write kill leaves the
+    previous autosave intact.
+    """
+    def __init__(self, data: dict, path: str):
+        """Store the dict and the target path; nothing else."""
+        super().__init__()
+        self.data = data
+        self.path = path
+        self.setAutoDelete(True)
+
+    def run(self):
+        """Worker entry point: serialise and replace the target file."""
+        import json as _json
+        try:
+            os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+            tmp = self.path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                _json.dump(self.data, f, indent=2, ensure_ascii=False)
+            os.replace(tmp, self.path)
+        except Exception:
+            # Autosave is best-effort; never crash the worker.
+            pass
+
+
 class MainWindow(QMainWindow):
 
     """The application window - see the module docstring."""
@@ -182,6 +216,7 @@ class MainWindow(QMainWindow):
         self.known_tags = set()                # tag auto-completion memory (per book)
         self._help = None                      # help window (created on first use)
 
+
         # Gemeinsames Notizarten-Register (wird auch von Szene/Inspector genutzt)
         self.note_types = {t.key: t for t in builtin_note_types()}
 
@@ -191,16 +226,32 @@ class MainWindow(QMainWindow):
         self.dirty = False
         self._restoring = False
 
+        # Per-note JSON cache for structural-sharing snapshots (Optimization.md 3.1)
+        self._note_json_cache = {}
+
+        # Dirty flags for refresh_views (Optimization.md 2.2)
+        self._dirty_flags = {
+            "tags": True, "tree": True, "stats": True,
+            "timeline": True, "aux": True, "links": True,
+        }
+
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setSingleShot(True)
         self._refresh_timer.setInterval(120)
         self._refresh_timer.timeout.connect(self.refresh_views)
+
+        # Incremental tree state.
+        self._tree_items = {}       # note_id -> (item, revision, parent_key)
+        self._tree_groups = {}      # type_key -> group QTreeWidgetItem
 
         self._checkpoint_timer = QTimer(self)
         self._checkpoint_timer.setSingleShot(True)
         self._checkpoint_timer.setInterval(350)
         self._checkpoint_timer.timeout.connect(self.checkpoint)
 
+        self._autosave_pool = QThreadPool(self)
+        self._autosave_pool.setMaxThreadCount(1)
+        self._autosave_in_flight = False
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setInterval(int(settings.get("autosave_minutes") or 2) * 60_000)
         self._autosave_timer.timeout.connect(self.autosave)
@@ -234,6 +285,7 @@ class MainWindow(QMainWindow):
         self.inspector.tags_committed.connect(self.remember_tags)
         self.comments_panel.open_requested.connect(lambda n, cid: self.open_editor(n, cid))
         self.comments_panel.delete_requested.connect(self.delete_comment)
+        self.comments_panel.focus_requested.connect(self.focus_note_from_comment)
 
         self.shelf.open_requested.connect(self.open_book)
         self.shelf.new_book_requested.connect(self.create_book)
@@ -631,11 +683,27 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------ Undo / Redo / Dirty
 
+    def _snapshot(self):
+        """Build a Snapshot with structural sharing against the previous one."""
+        project = self.build_project_data(for_file=False)
+        notes_json, conn_json, meta_json = Storage.snapshot_parts(
+            project, self._note_json_cache
+        )
+        # Update the cache with the new (id -> (json, signature)) mapping.
+        # The signature is just the JSON itself; identity comparison is what
+        # matters for sharing, and the dict keeps the same string objects.
+        self._note_json_cache = {
+            nid: (js, js) for nid, js in notes_json.items()
+        }
+        return Snapshot(notes_json, conn_json, meta_json)
+
     def capture_state(self):
-        # snapshots never contain attachment bytes (see attachments.py)
-        """Serialise the board to a JSON string (used for undo and dirty detection)."""
-        data = Storage.to_dict(self.build_project_data(for_file=False), with_blobs=False)
-        return json.dumps(data, sort_keys=True, ensure_ascii=False)
+        """Serialise the board for undo / dirty detection (structural sharing)."""
+        project = self.build_project_data(for_file=False)
+        notes_json, conn_json, meta_json = Storage.snapshot_parts(
+            project, self._note_json_cache)
+        self._note_json_cache = {nid: (js, js) for nid, js in notes_json.items()}
+        return Snapshot(notes_json, conn_json, meta_json)
 
     def schedule_checkpoint(self, *_):
         """Request an undo checkpoint shortly after the last change (debounced)."""
@@ -646,39 +714,32 @@ class MainWindow(QMainWindow):
 
     def checkpoint(self):
         """Aktuellen Zustand in den Verlauf aufnehmen (falls verändert)."""
-
         self._checkpoint_timer.stop()
-
         if self._restoring:
             return
-
         self.undo_stack.push(self.capture_state())
         self.update_undo_actions()
         self.update_dirty()
 
+    def _on_interaction_finished(self):
+        """Mouse released: checkpoint only if the state actually changed."""
+        snap = self.capture_state()
+        cur = self.undo_stack.current
+        if cur is None or not cur.equal(snap):
+            self._checkpoint_timer.start()
+
     def update_dirty(self):
         """Compare the current state with the saved state."""
-        self.dirty = self.undo_stack.current != self.saved_state
+        cur = self.undo_stack.current
+        self.dirty = self.saved_state is None or not cur.equal(self.saved_state)
         self.update_title()
 
     def update_undo_actions(self):
         """Enable/disable Undo and Redo."""
         board = not self.on_shelf()
         pending = self._checkpoint_timer.isActive()
-        self.act_undo.setEnabled(
-            board and (self.undo_stack.can_undo() or pending)
-        )
-        self.act_redo.setEnabled(
-            board and self.undo_stack.can_redo() and not pending
-        )
-
-    def reset_history(self):
-        """Start a fresh history (after loading a book)."""
-        state = self.capture_state()
-        self.undo_stack.reset(state)
-        self.saved_state = state
-        self.update_undo_actions()
-        self.update_dirty()
+        self.act_undo.setEnabled(board and (self.undo_stack.can_undo() or pending))
+        self.act_redo.setEnabled(board and self.undo_stack.can_redo() and not pending)
 
     def undo(self):
         """Step back in the history."""
@@ -696,19 +757,56 @@ class MainWindow(QMainWindow):
             self.apply_state(state)
             self.statusBar().showMessage(tr("Wiederholt"), 2000)
 
-    def apply_state(self, state):
+    def reset_history(self):
+        """Start a fresh history (after loading a book)."""
+        self._note_json_cache = {}
+        state = self.capture_state()
+        self.undo_stack.reset(state)
+        self.saved_state = state
+        self.update_undo_actions()
+        self.update_dirty()
 
-        """Rebuild the board from a snapshot, keeping the selection."""
-        selected = [
-            i.model.id for i in self.scene.selectedItems()
-            if isinstance(i, NoteItem)
-        ]
+    def apply_state(self, state):
+        """Rebuild the board from a snapshot, changing only the notes that differ."""
+        from models import ConnectionData, NoteTypeData
+
+        selected = [i.model.id for i in self.scene.selectedItems()
+                    if isinstance(i, NoteItem)]
+        old = self.undo_stack.current
+        changed = state.changed_note_ids(old) if old is not None else set(state.notes)
 
         self._restoring = True
         try:
-            project = Storage.from_dict(json.loads(state))
-            self.restore_project(project, fit=False, reset_filter=False, blobs="keep")
-
+            for nid in list(changed):
+                item = self.scene.note_lookup.get(nid)
+                if item is not None:
+                    self.scene.remove_note(item)
+            for nid in changed:
+                js = state.notes.get(nid)
+                if js is None:
+                    continue
+                nd = Storage.from_dict({
+                    "version": FORMAT_VERSION,
+                    "notes": [json.loads(js)],
+                    "connections": [],
+                }).notes[0]
+                if nd.note_type not in self.note_types:
+                    self.note_types[nd.note_type] = NoteTypeData(
+                        nd.note_type, nd.note_type, nd.color)
+                self.scene.add_note_item(nd)
+            for c in list(self.scene.connection_items):
+                self.scene.remove_connection(c)
+            for cd in (json.loads(state.connections) if state.connections else []):
+                start = self.scene.pin_lookup.get(cd["start_pin_id"])
+                end = self.scene.pin_lookup.get(cd["end_pin_id"])
+                if start is None or end is None:
+                    continue
+                self.scene.add_connection(
+                    ConnectionData(
+                        id=cd["id"], start_pin_id=cd["start_pin_id"],
+                        end_pin_id=cd["end_pin_id"],
+                        color=cd.get("color", ""), label=cd.get("label", ""),
+                    ), start, end)
             self.scene.clearSelection()
             for note_id in selected:
                 note = self.scene.note_lookup.get(note_id)
@@ -717,6 +815,8 @@ class MainWindow(QMainWindow):
         finally:
             self._restoring = False
 
+        self._note_json_cache = {nid: (js, js) for nid, js in state.notes.items()}
+        self.schedule_refresh()
         self.update_undo_actions()
         self.update_dirty()
 
@@ -724,9 +824,7 @@ class MainWindow(QMainWindow):
 
     def maybe_save(self):
         """True, wenn fortgefahren werden darf (gespeichert/verworfen)."""
-
         self.checkpoint()
-
         if not self.dirty:
             return True
 
@@ -832,8 +930,14 @@ class MainWindow(QMainWindow):
         return RECOVERY_PATH
 
     def autosave(self):
+        """Timer: write a recovery copy when there are unsaved changes.
 
-        """Timer: write a recovery copy when there are unsaved changes."""
+        Building the dict must happen on the UI thread (it reads the scene).
+        The JSON write itself runs on a worker thread so the app doesn't
+        freeze while 2–20 MB of JSON is serialised.  Overlapping requests are
+        dropped: if a previous autosave is still in flight, the timer skips
+        this tick and waits for the next one.
+        """
         if self.on_shelf():
             return
 
@@ -842,17 +946,40 @@ class MainWindow(QMainWindow):
         if not self.dirty:
             return
 
+        if self._autosave_in_flight:
+            return
+
         try:
-            Storage.save(self.build_project_data(), self.autosave_path())
+            data = Storage.to_dict(self.build_project_data())
         except Exception:
-            pass
+            return
+
+        self._autosave_in_flight = True
+        worker = _AutosaveWorker(data, self.autosave_path())
+        self._autosave_pool.start(worker)
+
+        # Reset the in-flight flag once the worker is finished.
+        # QThreadPool has no per-runner finished signal, so poll: cheap
+        # because it only fires on the autosave timer (every 2 min).
+        QTimer.singleShot(500, self._poll_autosave_done)
+
+    def _poll_autosave_done(self):
+        """Reset ``_autosave_in_flight`` when the pool is idle again."""
+        if self._autosave_pool.activeThreadCount() == 0:
+            self._autosave_in_flight = False
+        else:
+            QTimer.singleShot(500, self._poll_autosave_done)
 
     def clear_autosave(self):
         """Delete recovery copies (after saving or leaving)."""
+        self._autosave_in_flight = False
+        # Wait briefly for any in-flight autosave to finish, so it doesn't
+        # recreate the file after we delete it.  This happens on save / leave,
+        # not on a hot path.
+        self._autosave_pool.waitForDone(2000)
         paths = [RECOVERY_PATH]
         if self.current_file:
             paths.append(self.current_file + ".autosave")
-
         for p in paths:
             try:
                 os.remove(p)
@@ -1008,6 +1135,7 @@ class MainWindow(QMainWindow):
         m.rich = dialog.result_rich()
         m.comments[:] = dialog.result_comments()
         m.attachments = dialog.result_attachments()
+        note.model.touch()
         note.update()
 
         if self.inspector.note is note:
@@ -1022,6 +1150,7 @@ class MainWindow(QMainWindow):
         m.comments[:] = [c for c in m.comments if c.id != comment_id]
         if m.rich:
             m.rich = remove_comment_marker(m.rich, comment_id)
+            m.touch()
         note.update()
         if self.inspector.note is note:
             self.inspector.set_note(note)
@@ -1105,6 +1234,16 @@ class MainWindow(QMainWindow):
         if note is None or note.scene() is not self.scene:
             return
 
+        self.scene.clearSelection()
+        note.setSelected(True)
+        self.view.centerOn(note)
+
+    def focus_note_from_comment(self, note):
+        """Single-click in the Comments panel: select the note and centre the
+        board on it.  The inspector updates automatically because the
+        selection changed."""
+        if note is None or note.scene() is not self.scene:
+            return
         self.scene.clearSelection()
         note.setSelected(True)
         self.view.centerOn(note)
@@ -1209,6 +1348,9 @@ class MainWindow(QMainWindow):
 
     def schedule_refresh(self, *_):
         """Refresh derived views shortly after changes (debounced)."""
+        # Anything that changed invalidates all derived views
+        for k in self._dirty_flags:
+            self._dirty_flags[k] = True
         self._refresh_timer.start()
 
     def on_filter_changed(self, *_):
@@ -1217,36 +1359,44 @@ class MainWindow(QMainWindow):
         self.refresh_tree()
 
     def refresh_views(self):
-        """Refresh everything that is derived from the notes (tags, tree, stats, timeline …)."""
-        self.refresh_tag_combo()
+        """Refresh everything that is derived from the notes, using dirty flags."""
+        flags = self._dirty_flags
+        if flags["tags"]:
+            self.refresh_tag_combo()
+            flags["tags"] = False
         self.scene.set_filter(*self.current_filter())
-        self.refresh_tree()
-        self.inspector.refresh_links()
-
-        self.update_stats_label()
-        self.refresh_timeline()
-        self.refresh_aux()
+        if flags["tree"]:
+            self.refresh_tree()
+            flags["tree"] = False
+        if flags["links"]:
+            self.inspector.refresh_links()
+            flags["links"] = False
+        if flags["stats"]:
+            self.update_stats_label()
+            flags["stats"] = False
+        if flags["timeline"] and self.timeline_dock.isVisible():
+            self.refresh_timeline()
+            flags["timeline"] = False
+        if flags["aux"]:
+            self.refresh_aux()
+            flags["aux"] = False
 
     def refresh_aux(self):
         """Housekeeping after every change: orphan comments, spell vocabulary,
         tag suggestions and the comments panel."""
-
         notes = list(self.scene.note_lookup.values())
 
-        # A comment whose text marker disappeared (the words were deleted) is dropped
         pruned = False
         for n in notes:
             m = n.model
             if m.comments:
                 keep = [c for c in m.comments if COMMENT_PREFIX + c.id in (m.rich or "")]
                 if len(keep) != len(m.comments):
-                    m.comments[:] = keep        # in place: editors share this list
+                    m.comments[:] = keep
                     pruned = True
 
-        # Names of notes and tags are valid words for the spell checker
         engine.set_book_words([n.model.title for n in notes]
                               + [t for n in notes for t in n.model.tags])
-
         self.inspector.set_known_tags(sorted(self.known_tags))
         self.comments_panel.set_notes(notes)
         self.right_panel.setTabText(
@@ -1277,68 +1427,122 @@ class MainWindow(QMainWindow):
         self.tag_filter.blockSignals(False)
 
     def refresh_tree(self):
+        """Rebuild the left tree incrementally.
 
-        """Rebuild the left tree (matching notes grouped by type)."""
-        keep = self.inspector.note.model.id if self.inspector.note else None
+        The tree is only rebuilt from scratch when the filter widgets change
+        (``on_filter_changed``); every other update re-uses the existing
+        ``QTreeWidgetItem`` per note and only adds/removes/updates the ones
+        whose ``NoteData._revision`` changed.  Group items are kept across
+        refreshes, so the tree keeps scroll position and expansion state.
+        """
+        # --- 1. Which notes match the current filter? ---
+        matching = {}
+        for note in self.scene.note_lookup.values():
+            if self.scene.note_matches(note):
+                matching[note.model.id] = note
 
-        self.tree.blockSignals(True)
-        self.tree.clear()
+        # --- 2. Remove items for notes that are gone or no longer match ---
+        for nid in list(self._tree_items):
+            item, _rev, _pkey = self._tree_items[nid]
+            if nid not in matching:
+                parent = item.parent()
+                if parent is not None:
+                    parent.removeChild(item)
+                del self._tree_items[nid]
 
-        groups = {}
-        total = shown = 0
+        # --- 3. Add / update items for matching notes ---
+        groups = {}   # type_key -> group item
+        new_items = {}
 
-        notes = sorted(
-            self.scene.note_lookup.values(),
-            key=lambda n: n.model.title.lower()
-        )
-
-        for note in notes:
-            total += 1
-
-            if not self.scene.note_matches(note):
-                continue
-
-            shown += 1
-
+        for nid, note in matching.items():
             key = note.model.note_type
-            group = groups.get(key)
 
+            # Create or fetch the group item for this type.
+            group = groups.get(key) or self._tree_groups.get(key)
             if group is None:
                 info = self.note_types.get(key)
                 group = QTreeWidgetItem([info.label if info else key])
                 group.setIcon(0, color_icon(info.color if info else "#888888"))
                 group.setFlags(group.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-                groups[key] = group
+                self.tree.addTopLevelItem(group)
+            groups[key] = group
 
-            child = QTreeWidgetItem([note.model.title or tr("Ohne Titel")])
-            child.setData(0, Qt.ItemDataRole.UserRole, note.model.id)
+            old = self._tree_items.get(nid)
+            rev = note.model._revision
 
+            if old is not None and old[1] == rev and old[2] == key:
+                # Unchanged: reuse the item as-is.
+                new_items[nid] = old
+                continue
+
+            if old is not None:
+                # Item exists but the note (or its group) changed: update in place.
+                item = old[0]
+                if old[2] != key:
+                    # Type changed: move to a different parent.
+                    old_parent = item.parent()
+                    if old_parent is not None:
+                        old_parent.removeChild(item)
+                    group.addChild(item)
+            else:
+                item = QTreeWidgetItem([""])
+                group.addChild(item)
+
+            # Update text + icon + tooltip from the note.
+            item.setText(0, note.model.title or tr("Ohne Titel"))
             st = STATUS_INFO.get(note.model.status)
             if st:
-                child.setIcon(0, color_icon(st[1], 10))
-
+                item.setIcon(0, color_icon(st[1], 10))
+            else:
+                item.setIcon(0, QIcon())
             if note.model.tags:
-                child.setToolTip(0, "  ".join(f"#{t}" for t in note.model.tags))
+                item.setToolTip(0, "  ".join(f"#{t}" for t in note.model.tags))
+            else:
+                item.setToolTip(0, "")
+            item.setData(0, Qt.ItemDataRole.UserRole, nid)
 
-            group.addChild(child)
+            new_items[nid] = (item, rev, key)
 
+        # Drop empty groups (all their notes were filtered out).
+        for key in list(self._tree_groups):
+            group = self._tree_groups[key]
+            if group.childCount() == 0 and key not in groups:
+                idx = self.tree.indexOfTopLevelItem(group)
+                if idx >= 0:
+                    self.tree.takeTopLevelItem(idx)
+                del self._tree_groups[key]
+
+        # Reorder top-level groups to match note_types order.
         order = list(self.note_types.keys()) + [
             k for k in groups if k not in self.note_types
         ]
+        for i, key in enumerate(order):
+            group = groups.get(key) or self._tree_groups.get(key)
+            if group is None:
+                continue
+            current = self.tree.indexOfTopLevelItem(group)
+            if current != i:
+                self.tree.takeTopLevelItem(current)
+                self.tree.insertTopLevelItem(i, group)
+            self._tree_groups[key] = group
 
-        for key in order:
-            group = groups.get(key)
-            if group is not None:
-                group.setText(0, f"{group.text(0)}  ({group.childCount()})")
-                self.tree.addTopLevelItem(group)
+        # Update group labels with counts.
+        for key, group in self._tree_groups.items():
+            info = self.note_types.get(key)
+            label = info.label if info else key
+            group.setText(0, f"{label}  ({group.childCount()})")
 
-        self.tree.expandAll()
-        self.tree.blockSignals(False)
+        self._tree_items = new_items
 
-        self.count_label.setText(tr("{shown} von {total} Notizen", shown=shown, total=total))
-
+        # Signals blocked during the update; new selection gets set by
+        # the caller (on_note_selected / select_in_tree).
+        keep = self.inspector.note.model.id if self.inspector.note else None
         if keep:
             self.select_in_tree(keep)
+
+        total = len(self.scene.note_lookup)
+        shown = len(new_items)
+        self.count_label.setText(tr("{shown} von {total} Notizen", shown=shown, total=total))
 
     def select_in_tree(self, note_id):
 
@@ -1360,6 +1564,7 @@ class MainWindow(QMainWindow):
     def on_note_selected(self, note):
 
         """The scene's selection changed: show the note in the inspector."""
+        QTimer.singleShot(0, self.view.unsetCursor)
         self.inspector.set_note(note)
 
         if note is not None:
@@ -1555,9 +1760,9 @@ class MainWindow(QMainWindow):
         self.update_stats_label()
 
     def total_words(self):
-        """Number of words in all note texts."""
+        """Number of words in all note texts (cached per note)."""
         return sum(
-            count_words(n.model.content) for n in self.scene.note_lookup.values()
+            note_word_count(n.model) for n in self.scene.note_lookup.values()
         )
 
     def update_stats_label(self):
@@ -1746,6 +1951,7 @@ class MainWindow(QMainWindow):
 
         self.inspector.set_types(self.note_types)
         self.refresh_type_combo()
+
 
     def build_project_data(self, for_file=True):
         """Collect the current board into a :class:`ProjectData`.
@@ -1953,6 +2159,9 @@ class MainWindow(QMainWindow):
 
         self.inspector.set_types(self.note_types)
         self.refresh_type_combo()
+
+        self._tree_items.clear()
+        self._tree_groups.clear()
 
         self.scene.reset()
 

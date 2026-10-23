@@ -38,6 +38,7 @@ class CommentsPanel(QWidget):
 
     open_requested = Signal(object, str)      # note item, comment id
     delete_requested = Signal(object, str)    # note item, comment id
+    focus_requested = Signal(object)  # note item (single click)
 
     def __init__(self, parent=None):
         """Build the search box, list and buttons."""
@@ -76,6 +77,7 @@ class CommentsPanel(QWidget):
 
         self.search.textChanged.connect(self.rebuild)
         self.list.itemDoubleClicked.connect(lambda _: self._open_current())
+        self.list.itemClicked.connect(self._focus_current)
         self.go_button.clicked.connect(self._open_current)
         self.delete_button.clicked.connect(self._delete_current)
 
@@ -131,6 +133,12 @@ class CommentsPanel(QWidget):
             self._delete_current()
             return
         super().keyPressEvent(event)
+
+    def _focus_current(self, item):
+        """Single-click: emit ``focus_requested`` for the clicked comment's note."""
+        cur = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if cur is not None:
+            self.focus_requested.emit(cur[0])
 
 
 class RightPanel(QTabWidget):

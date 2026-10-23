@@ -11,6 +11,20 @@
 Notes with the attribute *Date* become dots on an axis; clicking a dot opens an
 information bubble.  Dates are converted to a single float ("days") by
 ``date_to_days`` so notes can be placed on a linear axis.
+
+Performance notes (Optimization.md)
+-----------------------------------
+The earlier ``paintEvent`` was O(N²) in the number of entries: ``_assign_levels``
+scanned the growing ``placed`` list once per entry, which on 5000 dated notes
+costs ~2.2 seconds per frame.  Fixes:
+
+*   ``_assign_levels`` now uses a bucket set per (x-bucket, level).  O(N).
+*   The level assignment is cached and only recomputed when the entries or the
+    view (``view_min``, ``ppd``) change — repeated paints (focus changes,
+    resize, hover) cost nothing.
+*   Painting loops only iterate over the entries whose screen x lies within
+    the viewport ±50 px, so panning a zoomed-in timeline touches a few dozen
+    entries, not all of them.
 """
 
 import math
@@ -33,14 +47,12 @@ from theme import ACCENT
 DAYS_PER_YEAR = 365.2425
 MONTH_DAYS = 30.44
 
-# Schrittweiten der Achsenbeschriftung in Monaten bzw. Jahren
 MONTH_STEPS = [1, 3, 6]
 YEAR_STEPS = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000]
 
 
 def date_to_days(key):
     """((Jahr, Monat, Tag), Minuten) -> fortlaufende Tageszahl."""
-
     (year, month, day), minutes = key
     return (
         year * DAYS_PER_YEAR
@@ -52,6 +64,9 @@ def date_to_days(key):
 
 class TimelineEntry:
     """One dated note on the timeline."""
+
+    __slots__ = ("note", "x", "date_text", "type_label", "level")
+
     def __init__(self, note, x, date_text, type_label):
         """Remember note, position (days), date text and type label."""
         self.note = note
@@ -80,6 +95,10 @@ class TimelineWidget(QWidget):
     MARGIN = 40
     BUBBLE_W = 270
 
+    # How many pixels left/right of the viewport to still paint (avoids a
+    # visible pop when the user pans by a pixel).
+    CULL_MARGIN = 50
+
     def __init__(self, parent=None):
         """Create an empty timeline."""
         super().__init__(parent)
@@ -87,7 +106,7 @@ class TimelineWidget(QWidget):
         self.entries = []
         self.undated = 0
         self.always = set()          # Notiz-IDs mit dauerhaftem Etikett
-        self.active = None           # Eintrag mit geöffneter Blase
+        self.active = None
         self.hover = None
 
         self.view_min = 0.0
@@ -98,6 +117,13 @@ class TimelineWidget(QWidget):
         self._moved = False
         self._bubble_rects = {}
 
+        # Level-assignment cache: (len(entries), id(entries), view_min, ppd)
+        self._levels_key = None
+        # Entry id list for visible-range culling: reused per paint when the
+        # visible range is unchanged.
+        self._visible_key = None
+        self._visible_entries = []
+
         self.setMouseTracking(True)
         self.setMinimumHeight(240)
         self.setToolTip("")
@@ -106,10 +132,20 @@ class TimelineWidget(QWidget):
 
     def set_entries(self, entries, undated=0):
         """entries: Liste (note, tage, datum_text, art_label)."""
-
         active_id = self.active.note.model.id if self.active else None
 
-        self.entries = [TimelineEntry(*e) for e in entries]
+        # Reuse entry objects where possible so we don't allocate 5000 per call.
+        old_by_id = {e.note.model.id: e for e in self.entries}
+        new_entries = []
+        for note, x, date_text, type_label in entries:
+            old = old_by_id.get(note.model.id)
+            if old is not None and old.x == x and old.date_text == date_text \
+                    and old.type_label == type_label:
+                new_entries.append(old)
+            else:
+                new_entries.append(TimelineEntry(note, x, date_text, type_label))
+
+        self.entries = new_entries
         self.entries.sort(key=lambda e: e.x)
         self.undated = undated
 
@@ -123,23 +159,26 @@ class TimelineWidget(QWidget):
         if not self._fitted and self.entries:
             self.fit()
 
+        # Invalidate caches that depended on the entries.
+        self._levels_key = None
+        self._visible_key = None
+
         self.update()
 
     def fit(self):
         """Alle Einträge sichtbar machen."""
-
         if not self.entries:
             return
-
         lo = self.entries[0].x
         hi = self.entries[-1].x
         span = hi - lo
         pad = max(span * 0.08, 60.0)
-
         usable = max(self.width() - 2 * self.MARGIN, 200)
         self.ppd = usable / (span + 2 * pad)
         self.view_min = lo - pad
         self._fitted = True
+        self._levels_key = None
+        self._visible_key = None
         self.update()
 
     # ------------------------------------------------------- Koordinaten
@@ -156,25 +195,67 @@ class TimelineWidget(QWidget):
         """Screen position of an entry's dot (incl. stacking level)."""
         return QPointF(self.sx(e.x), self.axis_y() - e.level * 17)
 
-    def _assign_levels(self):
-        """Überlappende Punkte übereinander staffeln."""
+    # ------------------------------------------------------------ Levels
 
-        placed = []
+    def _assign_levels(self):
+        """Assign each entry a stacking level (0..5) based on its screen x.
+
+        Cached: recomputed only when the entries or the visible view change.
+        Bucketed: O(N), instead of the previous O(N²) scan.
+        """
+        key = (id(self.entries), len(self.entries), self.view_min, self.ppd)
+        if self._levels_key == key:
+            return
+        self._levels_key = key
+
+        placed = set()
         for e in self.entries:
             px = self.sx(e.x)
+            bucket = int(px // 17)
             level = 0
-            while level < 6 and any(
-                abs(px - ox) < 17 and lv == level for ox, lv in placed
+            while level < 6 and (
+                (bucket, level) in placed
+                or (bucket - 1, level) in placed
+                or (bucket + 1, level) in placed
             ):
                 level += 1
             e.level = level
-            placed.append((px, level))
+            placed.add((bucket, level))
+
+    # ---------------------------------------------------------- Visible set
+
+    def _visible(self):
+        """Entries whose screen x lies within the viewport ± CULL_MARGIN.
+
+        Cached against the same key as ``_assign_levels`` so consecutive paints
+        of the same view don't rebuild the list.
+        """
+        key = (id(self.entries), len(self.entries), self.view_min, self.ppd)
+        if self._visible_key == key:
+            return self._visible_entries
+        self._visible_key = key
+
+        lo = -self.CULL_MARGIN
+        hi = self.width() + self.CULL_MARGIN
+        if not self.entries:
+            self._visible_entries = []
+        elif self.entries[0].x >= self.view_min and \
+                self.entries[-1].x <= self.view_min + (hi + self.CULL_MARGIN) / max(self.ppd, 1e-9):
+            # Fast path: everything visible (fit-all case).
+            self._visible_entries = self.entries
+        else:
+            out = []
+            for e in self.entries:
+                px = self.sx(e.x)
+                if lo <= px <= hi:
+                    out.append(e)
+            self._visible_entries = out
+        return self._visible_entries
 
     # ------------------------------------------------------------ Ticks
 
     def _ticks(self):
         """Liste (tage, beschriftung) für den sichtbaren Bereich."""
-
         vmin = self.view_min
         vmax = self.view_min + (self.width() - 2 * self.MARGIN) / self.ppd
 
@@ -183,7 +264,6 @@ class TimelineWidget(QWidget):
         target_px = 120.0
 
         if px_per_year * 1.0 >= target_px * 1.5:
-            # Monatsraster
             raw_months = target_px / (px_per_year / 12.0)
             step = next((m for m in MONTH_STEPS if m >= raw_months), 12)
             y0 = int(math.floor(vmin / DAYS_PER_YEAR)) - 1
@@ -210,7 +290,6 @@ class TimelineWidget(QWidget):
     # ------------------------------------------------------------ Zeichnen
 
     def paintEvent(self, event):
-
         """Qt event handler: repaint the widget."""
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -230,6 +309,7 @@ class TimelineWidget(QWidget):
             return
 
         self._assign_levels()
+        visible = self._visible()
 
         ay = self.axis_y()
 
@@ -260,18 +340,18 @@ class TimelineWidget(QWidget):
             w = QFontMetrics(hint_font).horizontalAdvance(txt)
             p.drawText(QPointF(self.width() - w - 12, self.height() - 10), txt)
 
-        # Punkte
-        for e in self.entries:
+        # Punkte (only the visible ones)
+        for e in visible:
             self._paint_point(p, e)
 
-        # Etiketten
+        # Etiketten (only the visible ones)
         label_font = QFont()
         label_font.setPointSizeF(8.5)
         label_font.setBold(True)
         p.setFont(label_font)
         fm = QFontMetrics(label_font)
 
-        for e in self.entries:
+        for e in visible:
             if e.note.model.id in self.always and e is not self.active:
                 pos = self.point_pos(e)
                 text = fm.elidedText(e.title, Qt.TextElideMode.ElideRight, 180)
@@ -289,7 +369,6 @@ class TimelineWidget(QWidget):
             self._paint_bubble(p, self.active)
 
     def _paint_point(self, p, e):
-
         """Draw one dot (with glow when hovered / active)."""
         pos = self.point_pos(e)
         c = e.color
@@ -307,8 +386,7 @@ class TimelineWidget(QWidget):
         p.drawEllipse(pos, 6.5, 6.5)
 
     def _paint_bubble(self, p, e):
-
-        """Draw the information bubble of the active entry and remember its click areas."""
+        """Draw the information bubble of the active entry."""
         pos = self.point_pos(e)
         c = e.color
 
@@ -320,7 +398,6 @@ class TimelineWidget(QWidget):
         y = max(pos.y() - h - 16, 6)
         rect = QRectF(x, y, w, h)
 
-        # Pfeil zum Punkt
         arrow = QPainterPath()
         ax = min(max(pos.x(), x + 16), x + w - 16)
         arrow.moveTo(ax - 8, rect.bottom())
@@ -336,7 +413,6 @@ class TimelineWidget(QWidget):
         p.setBrush(QColor("#1e1f24"))
         p.drawPath(body)
 
-        # Kopfzeile in Notizfarbe
         head = QRectF(x + 6, y + 6, w - 12, header_h - 6)
         tint = QColor(c)
         tint.setAlpha(55)
@@ -356,13 +432,11 @@ class TimelineWidget(QWidget):
         title = fm.elidedText(e.title, Qt.TextElideMode.ElideRight, int(head.width() - 60))
         p.drawText(QPointF(head.left() + 26, head.center().y() + fm.ascent() / 2 - 2), title)
 
-        # Sprung-Schaltfläche ">"
         jump = QRectF(head.right() - 30, head.top(), 28, head.height())
         self._bubble_rects["jump"] = jump
         p.setPen(QColor("#e6e6ea"))
         p.drawText(jump, "›", QTextOption(Qt.AlignmentFlag.AlignCenter))
 
-        # Inhalt
         sf = QFont()
         sf.setPointSizeF(8.5)
         p.setFont(sf)
@@ -377,7 +451,6 @@ class TimelineWidget(QWidget):
         p.setPen(QColor("#f1f1f4"))
         p.drawText(QRectF(x + 8, y + header_h + 24, w - 16, 30), e.date_text, TO(Qt.AlignmentFlag.AlignCenter))
 
-        # Fußzeile
         foot_y = y + header_h + body_h
         p.setPen(QPen(QColor("#33343d"), 1))
         p.drawLine(QPointF(x, foot_y), QPointF(x + w, foot_y))
@@ -414,8 +487,9 @@ class TimelineWidget(QWidget):
 
     def _entry_at(self, pos):
         """The entry whose dot is within 11 px of ``pos`` (None if no dot is near)."""
+        # Only hit-test the visible entries — the rest are not on screen.
         best, dist = None, 11.0
-        for e in self.entries:
+        for e in self._visible():
             pp = self.point_pos(e)
             d = math.hypot(pp.x() - pos.x(), pp.y() - pos.y())
             if d <= dist:
@@ -423,7 +497,6 @@ class TimelineWidget(QWidget):
         return best
 
     def mousePressEvent(self, event):
-
         """Qt event handler: a mouse button was pressed."""
         if event.button() != Qt.MouseButton.LeftButton:
             return
@@ -453,7 +526,6 @@ class TimelineWidget(QWidget):
                 return
 
     def mouseMoveEvent(self, event):
-
         """Qt event handler: the mouse moved."""
         pos = event.position()
 
@@ -464,6 +536,8 @@ class TimelineWidget(QWidget):
                 x0, vmin0 = self._pan_origin
                 self.view_min = vmin0 - (pos.x() - x0) / self.ppd
                 self._fitted = True
+                self._levels_key = None
+                self._visible_key = None
                 self.update()
             return
 
@@ -476,18 +550,14 @@ class TimelineWidget(QWidget):
             self.update()
 
     def mouseReleaseEvent(self, event):
-
         """Qt event handler: a mouse button was released."""
         if event.button() != Qt.MouseButton.LeftButton or self._press is None:
             return
-
         pos = event.position()
         moved = self._moved
         self._press = None
-
         if moved:
             return
-
         hit = self._entry_at(pos)
         self.active = hit if hit is not self.active else None
         self.update()
@@ -499,20 +569,18 @@ class TimelineWidget(QWidget):
             self.fit()
 
     def wheelEvent(self, event):
-
         """Qt event handler: mouse wheel."""
         factor = 1.2 if event.angleDelta().y() > 0 else 1 / 1.2
         cx = event.position().x()
-
         anchor = self.view_min + (cx - self.MARGIN) / self.ppd
         self.ppd = min(max(self.ppd * factor, 0.0005), 40.0)
         self.view_min = anchor - (cx - self.MARGIN) / self.ppd
-
         self._fitted = True
+        self._levels_key = None
+        self._visible_key = None
         self.update()
 
     def event(self, ev):
-
         """Qt: generic event handler (used for tool-tips)."""
         if ev.type() == QEvent.Type.ToolTip:
             e = self._entry_at(ev.pos())
@@ -525,5 +593,4 @@ class TimelineWidget(QWidget):
             else:
                 QToolTip.hideText()
             return True
-
         return super().event(ev)

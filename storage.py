@@ -231,3 +231,72 @@ class Storage:
             data = json.load(file)
 
         return Storage.from_dict(data)
+
+    @staticmethod
+    def note_to_dict(note) -> dict:
+        """Serialise a single NoteData to a dict (no blobs)."""
+        return {
+            "id": note.id,
+            "title": note.title,
+            "content": note.content,
+            "x": note.x,
+            "y": note.y,
+            "width": note.width,
+            "height": note.height,
+            "color": note.color,
+            "note_type": note.note_type,
+            "status": note.status,
+            "locked": note.locked,
+            "rich": note.rich,
+            "tags": list(note.tags),
+            "attributes": [
+                {"name": a.name, "value": a.value} for a in note.attributes
+            ],
+            "pins": [
+                {"id": p.id, "x": p.x, "y": p.y, "color": p.color,
+                 "locked": p.locked} for p in note.pins
+            ],
+            "attachments": [
+                {"id": a.id, "name": a.name, "mime": a.mime,
+                 "size": a.size, "inline": a.inline} for a in note.attachments
+            ],
+            "comments": [
+                {"id": c.id, "text": c.text, "quote": c.quote,
+                 "created": c.created} for c in note.comments
+            ],
+        }
+
+    @staticmethod
+    def snapshot_parts(project, note_cache=None):
+        """Return ``(notes_json, connections_json, meta_json)`` for a Snapshot.
+
+        ``note_cache`` maps note id -> (json_str, signature) from the previous
+        snapshot; unchanged notes reuse the cached string (structural sharing).
+        """
+        import json as _json
+        note_cache = note_cache or {}
+        notes_json = {}
+        for note in project.notes:
+            data = Storage.note_to_dict(note)
+            sig = _json.dumps(data, sort_keys=True, ensure_ascii=False)
+            cached = note_cache.get(note.id)
+            if cached is not None and cached[1] == sig:
+                notes_json[note.id] = cached[0]
+            else:
+                notes_json[note.id] = sig
+        connections_json = _json.dumps(
+            [{"id": c.id, "start_pin_id": c.start_pin_id,
+              "end_pin_id": c.end_pin_id, "color": c.color, "label": c.label}
+             for c in project.connections],
+            sort_keys=True, ensure_ascii=False,
+        )
+        meta_json = _json.dumps({
+            "version": FORMAT_VERSION,
+            "custom_types": [
+                {"key": t.key, "label": t.label, "color": t.color,
+                 "attributes": list(t.attributes)}
+                for t in project.custom_types
+            ],
+            "known_tags": list(project.known_tags),
+        }, sort_keys=True, ensure_ascii=False)
+        return notes_json, connections_json, meta_json

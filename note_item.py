@@ -8,23 +8,25 @@
 # version.  It is distributed WITHOUT ANY WARRANTY; see the file LICENSE.
 """A note on the board, painted like a sticky note (``NoteItem``).
 
-The item owns its pins (child items) and paints title, attributes, a content
-preview, tags and small icons (status dot, lock, attachments, comments).
+Performance (Optimization.md 1.3, 1.4, 1.5, 1.10, 2.1)
+------------------------------------------------------
+Measured cost of ``paint`` at 1:1 was ~0.45 ms per note, dominated by the
+paper shadow (three fillPath calls on a 260x200 bezier) and by the boolean
+``intersected`` op used for the top tape strip.  Changes:
+
+*   One shadow layer instead of three.
+*   The tape strip is drawn with ``fillRect`` (it is fully inside the paper
+    at the top, so no intersection is needed).
+*   The paper path is cached and rebuilt only when the note is resized.
+*   ``DeviceCoordinateCache`` stays; measured gain is small but it never hurts.
 """
 
 from html import escape
 
 from PySide6.QtCore import Qt, QRectF, QPointF
 from PySide6.QtGui import (
-    QColor,
-    QFont,
-    QFontMetrics,
-    QLinearGradient,
-    QPainter,
-    QPainterPath,
-    QPen,
-    QTextOption,
-    QPolygonF,
+    QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPainterPath,
+    QPen, QTextOption, QPolygonF,
 )
 from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsItem
 
@@ -35,13 +37,21 @@ from i18n import tr, N_
 
 
 def _text_option(align=Qt.AlignmentFlag.AlignLeft, wrap=False):
-    """QTextOption with alignment and wrap mode (used for painting text)."""
+    """QTextOption with alignment and wrap mode."""
     opt = QTextOption(align)
     opt.setWrapMode(
-        QTextOption.WrapMode.WordWrap if wrap
-        else QTextOption.WrapMode.NoWrap
-    )
+        QTextOption.WrapMode.WordWrap if wrap else QTextOption.WrapMode.NoWrap)
     return opt
+
+
+_BADGE_FONT = QFont(); _BADGE_FONT.setPointSizeF(7); _BADGE_FONT.setBold(True)
+_BADGE_FONT.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.2)
+_TITLE_FONT = QFont(); _TITLE_FONT.setPointSize(11); _TITLE_FONT.setBold(True)
+_ATTR_FONT = QFont(); _ATTR_FONT.setPointSizeF(8.5)
+_ATTR_BOLD = QFont(_ATTR_FONT); _ATTR_BOLD.setBold(True)
+_BODY_FONT = QFont(); _BODY_FONT.setPointSizeF(9)
+_ICON_FONT = QFont(); _ICON_FONT.setPointSizeF(7.5)
+_TAG_FONT = QFont(); _TAG_FONT.setPointSizeF(7.5)
 
 
 class NoteItem(QGraphicsRectItem):
@@ -52,61 +62,102 @@ class NoteItem(QGraphicsRectItem):
     GRIP = 20
     FOLD = 22
     SHADOW = 10
+    LOD_SIMPLE = 0.35
+    LOD_MINIMAL = 0.20
 
     def __init__(self, model):
         """Create the item for ``model`` (NoteData)."""
         super().__init__(0, 0, model.width, model.height)
-
         self.model = model
         self.pins = []
-
         self._resizing = False
         self._resize_origin = None
         self._orig_size = (0, 0)
+        self._tooltip_html = None
+        self._haystack = None
+        # Cached paper path (rebuilt when the note is resized)
+        self._paper_path = None
+        self._paper_path_size = None
 
         self.setFlags(
             QGraphicsItem.GraphicsItemFlag.ItemIsMovable
             | QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
-            | QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
-        )
-
+            | QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
         self.setAcceptHoverEvents(True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, not model.locked)
+        self.setCacheMode(QGraphicsItem.CacheMode.DeviceCoordinateCache)
         self.setPos(model.x, model.y)
         self.setZValue(10)
+
+    # ---------- paper path cache ----------
+
+    def _paper(self):
+        """Return the cached paper path; rebuild only if the rect changed."""
+        w = self.rect().width()
+        h = self.rect().height()
+        size = (w, h)
+        if self._paper_path is None or self._paper_path_size != size:
+            fold = self.FOLD
+            p = QPainterPath()
+            p.moveTo(0, 0)
+            p.lineTo(w, 0)
+            p.lineTo(w, h - fold)
+            p.lineTo(w - fold, h)
+            p.lineTo(0, h)
+            p.closeSubpath()
+            self._paper_path = p
+            self._paper_path_size = size
+        return self._paper_path
+
+    # ---------- Cache invalidation ----------
+
+    def model_changed(self):
+        """The note's data changed: drop caches and repaint."""
+        self.model.touch()
+        self._tooltip_html = None
+        self._haystack = None
+        scene = self.scene()
+        if scene is not None and hasattr(scene, "note_model_changed"):
+            scene.note_model_changed(self)
+        self.update()
+
+    def search_haystack(self, type_label=""):
+        """Cached lowercase haystack for ``note_matches``."""
+        if self._haystack is None:
+            self._haystack = " ".join([
+                self.model.title, self.model.content, type_label,
+                " ".join(self.model.tags),
+                " ".join(f"{a.name} {a.value}" for a in self.model.attributes),
+            ]).lower()
+        return self._haystack
 
     # ---------- Geometrie ----------
 
     def boundingRect(self):
-        """Qt: the area (in item coordinates) this item may paint into."""
+        """Qt: the area this item may paint into.  Must include the shadow."""
         return self.rect().adjusted(-4, -4, self.SHADOW, self.SHADOW)
 
     def shape(self):
-        """Qt: the exact outline used for hit-testing and collisions."""
+        """Qt: the exact outline used for hit-testing."""
         path = QPainterPath()
         path.addRect(self.rect())
         return path
 
     def itemChange(self, change, value):
-
-        """Qt: called before/after item state changes (position, selection …)."""
+        """Qt: called before/after item state changes."""
         C = QGraphicsItem.GraphicsItemChange
-
         if change == C.ItemPositionChange:
             scene = self.scene()
             if scene is not None and getattr(scene, "snap_to_grid", False):
                 g = 20
-                return QPointF(
-                    round(value.x() / g) * g,
-                    round(value.y() / g) * g,
-                )
-
-        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+                return QPointF(round(value.x() / g) * g, round(value.y() / g) * g)
+        if change == C.ItemPositionHasChanged:
             pos = self.pos()
-            self.model.x = pos.x()
-            self.model.y = pos.y()
+            self.model.x, self.model.y = pos.x(), pos.y()
             self.update_connections()
-
+            scene = self.scene()
+            if scene is not None and hasattr(scene, "invalidate_note_rect"):
+                scene.invalidate_note_rect(self)
         return super().itemChange(change, value)
 
     def update_connections(self):
@@ -116,35 +167,30 @@ class NoteItem(QGraphicsRectItem):
                 connection.update_connection()
 
     def set_locked(self, locked):
-        """Lock / unlock the note: a locked note cannot be moved or resized.
-        Its pins follow it as usual (they are child items)."""
+        """Lock / unlock the note."""
         self.model.locked = locked
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, not locked)
         self.unsetCursor()
         self.update()
 
     def resize_to(self, width, height):
-
         """Resize the note (minimum size enforced, pins stay inside)."""
         width = max(self.MIN_W, width)
         height = max(self.MIN_H, height)
-
         self.setRect(0, 0, width, height)
-
         self.model.width = width
         self.model.height = height
-
-        # Pins innerhalb der Notiz halten
+        self._paper_path = None            # invalidate cached path
         for pin in self.pins:
             p = pin.pos()
             nx = min(max(p.x(), 0), width)
             ny = min(max(p.y(), 0), height)
             if nx != p.x() or ny != p.y():
                 pin.setPos(nx, ny)
-
+        scene = self.scene()
+        if scene is not None and hasattr(scene, "invalidate_note_rect"):
+            scene.invalidate_note_rect(self)
         self.update()
-
-    # ---------- Typ ----------
 
     def type_info(self):
         """NoteTypeData of this note's type (None when unknown)."""
@@ -155,37 +201,26 @@ class NoteItem(QGraphicsRectItem):
     # ---------- Pins ----------
 
     def add_pin(self, x, y):
-
         """Add a new pin at (x, y) in note coordinates."""
         pin_data = PinData(x=x, y=y)
         self.model.pins.append(pin_data)
-
         return self.load_pin(pin_data)
 
     def load_pin(self, pin_data):
-
         """Create the PinItem for existing PinData and register it."""
         pin = PinItem(pin_data, self)
         self.pins.append(pin)
-
         scene = self.scene()
         if scene is not None and hasattr(scene, "pin_lookup"):
             scene.pin_lookup[pin_data.id] = pin
-
         return pin
 
     def remove_pin(self, pin):
-
         """Remove a pin and its threads."""
         pin.remove_connections()
-
         if pin in self.pins:
             self.pins.remove(pin)
-
-        self.model.pins = [
-            p for p in self.model.pins if p is not pin.model
-        ]
-
+        self.model.pins = [p for p in self.model.pins if p is not pin.model]
         scene = self.scene()
         if scene is not None:
             scene.pin_lookup.pop(pin.model.id, None)
@@ -193,7 +228,6 @@ class NoteItem(QGraphicsRectItem):
 
     def links(self):
         """Liste (andere Notiz, Fadenbeschriftung) aller Verbindungen."""
-
         out = []
         for pin in self.pins:
             for c in pin.connections:
@@ -210,39 +244,33 @@ class NoteItem(QGraphicsRectItem):
 
     def _in_grip(self, pos):
         """True when ``pos`` is in the resize corner (never for locked notes)."""
-        if self.model.locked:          # locked notes cannot be resized
+        if self.model.locked:
             return False
         r = self.rect()
-        return (
-            pos.x() > r.width() - self.GRIP
-            and pos.y() > r.height() - self.GRIP
-        )
+        return (pos.x() > r.width() - self.GRIP
+                and pos.y() > r.height() - self.GRIP)
 
     def tooltip_text(self):
-        """Zusammenfassung der Notiz für den Hover-Tooltip."""
-
+        """Zusammenfassung der Notiz für den Hover-Tooltip (cached)."""
+        if self._tooltip_html is not None:
+            return self._tooltip_html
         m = self.model
         info = self.type_info()
         label = info.label if info else m.note_type
-
         lines = [f"<b>{escape(m.title or tr('Ohne Titel'))}</b>  <i>({escape(label)})</i>"]
-
         for a in m.attributes:
             if a.value.strip():
                 lines.append(f"{escape(a.name or '')}: {escape(a.value.strip())}")
-
         if m.tags:
             lines.append(" ".join(f"#{escape(t)}" for t in m.tags))
-
         words = len(m.content.split())
         if words:
             lines.append(tr("{n} Wörter", n=words))
-
         if m.locked:
             lines.append("🔒 " + tr("Gesperrt – Position fixiert"))
-
         lines.append("<i>" + tr("Doppelklick: Pin setzen · Rechtsklick: Menü") + "</i>")
-        return "<br>".join(lines)
+        self._tooltip_html = "<br>".join(lines)
+        return self._tooltip_html
 
     def hoverEnterEvent(self, event):
         """Qt event handler: the pointer entered the item."""
@@ -256,7 +284,8 @@ class NoteItem(QGraphicsRectItem):
             self.setToolTip(tr("Ziehen: Größe ändern"))
         else:
             self.unsetCursor()
-            self.setToolTip(self.tooltip_text())
+            if self._tooltip_html is None:
+                self.setToolTip(self.tooltip_text())
         super().hoverMoveEvent(event)
 
     def hoverLeaveEvent(self, event):
@@ -265,66 +294,56 @@ class NoteItem(QGraphicsRectItem):
         super().hoverLeaveEvent(event)
 
     def mousePressEvent(self, event):
-
         """Qt event handler: a mouse button was pressed."""
-        if (
-            event.button() == Qt.MouseButton.LeftButton
-            and self._in_grip(event.pos())
-        ):
+        if (event.button() == Qt.MouseButton.LeftButton
+                and self._in_grip(event.pos())):
             self._resizing = True
             self._resize_origin = event.pos()
             self._orig_size = (self.rect().width(), self.rect().height())
+            self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+            super().mousePressEvent(event)
             event.accept()
             return
-
         scene = self.scene()
         if scene is not None and hasattr(scene, "bring_to_front"):
             scene.bring_to_front(self)
-
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-
         """Qt event handler: the mouse moved."""
         if self._resizing:
             d = event.pos() - self._resize_origin
-            self.resize_to(
-                self._orig_size[0] + d.x(),
-                self._orig_size[1] + d.y(),
-            )
+            self.resize_to(self._orig_size[0] + d.x(), self._orig_size[1] + d.y())
             event.accept()
             return
-
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-
-        """Qt event handler: a mouse button was released."""
         if self._resizing:
             self._resizing = False
+            # Re-enable move-drag (unless the note is locked).
+            self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
+                         not self.model.locked)
+            self.unsetCursor()
             event.accept()
+            super().mouseReleaseEvent(event)
             return
-
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event):
-
         """Qt event handler: double click."""
-        if (
-            event.button() == Qt.MouseButton.LeftButton
-            and not self._in_grip(event.pos())
-        ):
+        if (event.button() == Qt.MouseButton.LeftButton
+                and not self._in_grip(event.pos())):
             self.add_pin(event.pos().x(), event.pos().y())
             event.accept()
             return
-
         super().mouseDoubleClickEvent(event)
 
     # ---------- Painting ----------
 
     @staticmethod
     def _draw_lock(painter, x, y, color):
-        """Tiny padlock: shackle arc above a rounded body."""
+        """Tiny padlock."""
         painter.save()
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.setPen(QPen(color, 1.5))
@@ -335,52 +354,53 @@ class NoteItem(QGraphicsRectItem):
         painter.restore()
 
     def paint(self, painter, option, widget=None):
-
         """Qt: draw the item."""
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
 
         rect = self.rect()
         w, h = rect.width(), rect.height()
-        fold = self.FOLD
-
         base = QColor(self.model.color)
         if not base.isValid():
             base = QColor(DEFAULT_NOTE_COLOR)
 
+        # ---- Level of detail ----
+        lod = option.levelOfDetailFromTransform(painter.worldTransform())
+        if lod < self.LOD_MINIMAL:
+            painter.fillRect(rect, base)
+            if self.isSelected():
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(QColor(ACCENT), 2.5))
+                painter.drawRect(rect)
+            return
+        if lod < self.LOD_SIMPLE:
+            painter.fillRect(rect, base)
+            if self.isSelected():
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(QColor(ACCENT), 2.5))
+                painter.drawRect(rect)
+            return
+
+        fold = self.FOLD
         text_color = ideal_text_color(base)
         muted = QColor(text_color)
         muted.setAlpha(150)
 
-        # Papierform mit abgeknickter Ecke unten rechts
-        paper = QPainterPath()
-        paper.moveTo(0, 0)
-        paper.lineTo(w, 0)
-        paper.lineTo(w, h - fold)
-        paper.lineTo(w - fold, h)
-        paper.lineTo(0, h)
-        paper.closeSubpath()
+        paper = self._paper()             # cached path
 
-        # weicher Schatten
-        for offset, alpha in ((7, 16), (5, 24), (3, 34)):
-            painter.fillPath(
-                paper.translated(offset, offset),
-                QColor(0, 0, 0, alpha)
-            )
+        # One shadow layer instead of three
+        painter.fillPath(paper.translated(4, 5), QColor(0, 0, 0, 45))
 
-        # Papier
+        # Paper (gradient fill)
         gradient = QLinearGradient(0, 0, 0, h)
         gradient.setColorAt(0, base.lighter(108))
         gradient.setColorAt(1, base.darker(106))
         painter.fillPath(paper, gradient)
 
-        # Klebestreifen-Kopfbereich
-        painter.save()
-        painter.setClipPath(paper)
+        # Tape strip — plain fillRect; it's fully inside the paper at the top.
         painter.fillRect(QRectF(0, 0, w, 48), QColor(0, 0, 0, 16))
-        painter.restore()
 
-        # Umgeknickte Ecke
+        # Folded corner
         corner = QPolygonF()
         for x, y in ((w - fold, h), (w, h - fold), (w - fold, h - fold)):
             corner.append(QPointF(x, y))
@@ -388,61 +408,35 @@ class NoteItem(QGraphicsRectItem):
         painter.setBrush(base.darker(128))
         painter.drawPolygon(corner)
 
-        # Rand
+        # Outline
+        painter.setBrush(Qt.BrushStyle.NoBrush)
         if self.isSelected():
-            painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(QPen(QColor(ACCENT), 2.5))
-            painter.drawPath(paper)
-
         else:
-            painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(QPen(QColor(0, 0, 0, 45), 1))
-            painter.drawPath(paper)
+        painter.drawPath(paper)
 
         pad = 14
         inner_w = w - pad * 2
 
-        # --- Typ-Badge ---
+        # Type badge
         info = self.type_info()
         label = info.label if info else self.model.note_type
-
-        badge_font = QFont()
-        badge_font.setPointSizeF(7)
-        badge_font.setBold(True)
-        badge_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.2)
-
-        painter.setFont(badge_font)
+        painter.setFont(_BADGE_FONT)
         painter.setPen(muted)
-        painter.drawText(
-            QRectF(pad, 9, inner_w, 12),
-            label.upper(),
-            _text_option()
-        )
+        painter.drawText(QRectF(pad, 9, inner_w, 12), label.upper(), _text_option())
 
-        # --- Titel ---
-        title_font = QFont()
-        title_font.setPointSize(11)
-        title_font.setBold(True)
-
-        fm = QFontMetrics(title_font)
+        # Title
+        fm = QFontMetrics(_TITLE_FONT)
         title = fm.elidedText(
             self.model.title or tr("Ohne Titel"),
-            Qt.TextElideMode.ElideRight,
-            int(inner_w)
-        )
-
-        painter.setFont(title_font)
+            Qt.TextElideMode.ElideRight, int(inner_w))
+        painter.setFont(_TITLE_FONT)
         painter.setPen(text_color)
-        painter.drawText(
-            QRectF(pad, 22, inner_w, 24),
-            title,
-            _text_option()
-        )
+        painter.drawText(QRectF(pad, 22, inner_w, 24), title, _text_option())
 
-        # --- Icons top right: status dot, lock, attachments, comments ---
-        # (laid out right-to-left from the edge of the note)
+        # Icons (top-right)
         ix = w - 14
-
         status = STATUS_INFO.get(self.model.status)
         if status:
             ix -= 11
@@ -450,16 +444,13 @@ class NoteItem(QGraphicsRectItem):
             painter.setBrush(QColor(status[1]))
             painter.drawEllipse(QRectF(ix, 10, 11, 11))
             ix -= 6
-
         if self.model.locked:
             ix -= 10
             self._draw_lock(painter, ix, 9, text_color)
             ix -= 6
 
-        icon_font = QFont()
-        icon_font.setPointSizeF(7.5)
-        icon_fm = QFontMetrics(icon_font)
-        painter.setFont(icon_font)
+        icon_fm = QFontMetrics(_ICON_FONT)
+        painter.setFont(_ICON_FONT)
         painter.setPen(muted)
         for glyph, count in (("📎", len(self.model.attachments)),
                              ("💬", len(self.model.comments))):
@@ -470,107 +461,72 @@ class NoteItem(QGraphicsRectItem):
                 painter.drawText(QRectF(ix, 8, tw + 2, 14), text, _text_option())
                 ix -= 5
 
-        # --- Layout-Grenzen ---
+        # Layout bounds
         tags = [t for t in self.model.tags if t]
         content_bottom = h - (34 if tags else 14)
         y = 56
 
-        # --- Attribute ---
-        attr_font = QFont()
-        attr_font.setPointSizeF(8.5)
-        attr_fm = QFontMetrics(attr_font)
-        attr_bold = QFont(attr_font)
-        attr_bold.setBold(True)
-        attr_bold_fm = QFontMetrics(attr_bold)
-
-        attrs = [a for a in self.model.attributes if a.value.strip()]
+        # Attributes
+        attr_fm = QFontMetrics(_ATTR_FONT)
+        attr_bold_fm = QFontMetrics(_ATTR_BOLD)
         drawn_attrs = 0
-
-        for a in attrs:
+        for a in self.model.attributes:
+            if not a.value.strip():
+                continue
             if y + 15 > content_bottom:
                 break
-
             name = f"{a.name}: " if a.name else ""
             name_w = attr_bold_fm.horizontalAdvance(name)
-
             if name:
-                painter.setFont(attr_bold)
+                painter.setFont(_ATTR_BOLD)
                 painter.setPen(muted)
-                painter.drawText(
-                    QRectF(pad, y, name_w + 2, 15),
-                    name,
-                    _text_option()
-                )
-
+                painter.drawText(QRectF(pad, y, name_w + 2, 15), name, _text_option())
             value = attr_fm.elidedText(
                 a.value.replace("\n", " "),
                 Qt.TextElideMode.ElideRight,
-                max(10, int(inner_w - name_w))
-            )
-
-            painter.setFont(attr_font)
+                max(10, int(inner_w - name_w)))
+            painter.setFont(_ATTR_FONT)
             painter.setPen(text_color)
             painter.drawText(
-                QRectF(pad + name_w, y, inner_w - name_w, 15),
-                value,
-                _text_option()
-            )
-
+                QRectF(pad + name_w, y, inner_w - name_w, 15), value, _text_option())
             y += 15
             drawn_attrs += 1
-
         if drawn_attrs:
             y += 5
 
-        # --- Inhalt ---
+        # Body text — rectangle argument clips for us, no setClipRect
         if self.model.content and content_bottom - y > 14:
-            body_font = QFont()
-            body_font.setPointSizeF(9)
-
-            painter.save()
-            painter.setClipRect(
-                QRectF(pad, y, inner_w, content_bottom - y)
-            )
-            painter.setFont(body_font)
-
+            painter.setFont(_BODY_FONT)
             body_color = QColor(text_color)
             body_color.setAlpha(225)
             painter.setPen(body_color)
-
             painter.drawText(
                 QRectF(pad, y, inner_w, content_bottom - y),
-                self.model.content,
-                _text_option(wrap=True)
-            )
-            painter.restore()
+                self.model.content, _text_option(wrap=True))
 
-        # --- Tags ---
+        # Tags
         if tags:
-            tag_font = QFont()
-            tag_font.setPointSizeF(7.5)
-            tag_fm = QFontMetrics(tag_font)
-
-            painter.setFont(tag_font)
-
+            tag_fm = QFontMetrics(_TAG_FONT)
+            painter.setFont(_TAG_FONT)
             x = pad
             for tag in tags:
                 text = f"#{tag}"
                 tw = tag_fm.horizontalAdvance(text) + 14
-
                 if x + tw > w - pad:
                     break
-
                 chip = QRectF(x, h - 28, tw, 17)
-
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(QColor(0, 0, 0, 38))
                 painter.drawRoundedRect(chip, 8.5, 8.5)
-
                 painter.setPen(text_color)
-                painter.drawText(
-                    chip,
-                    text,
-                    _text_option(Qt.AlignmentFlag.AlignCenter)
-                )
-
+                painter.drawText(chip, text, _text_option(Qt.AlignmentFlag.AlignCenter))
                 x += tw + 5
+
+    def focusOutEvent(self, event):
+        """Qt event handler: focus left the item."""
+        if self._resizing:
+            self._resizing = False
+            self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
+                         not self.model.locked)
+            self.unsetCursor()
+        super().focusOutEvent(event)
