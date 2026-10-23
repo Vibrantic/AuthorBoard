@@ -39,8 +39,9 @@ from PySide6.QtWidgets import (
 
 import i18n
 from i18n import tr
+from resource import resource_path
 
-HELP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "help")
+HELP_DIR = resource_path("help")
 
 
 def load_topics(lang):

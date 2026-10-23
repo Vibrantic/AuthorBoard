@@ -42,6 +42,7 @@ from PySide6.QtCore import (
     QTimer,
     QTranslator,
     QRunnable,
+    QProcess
 )
 
 from PySide6.QtGui import (
@@ -127,6 +128,7 @@ from theme import (
 import i18n
 from i18n import tr, N_
 from storage import FORMAT_VERSION, Storage
+from resource import resource_path
 
 SETTINGS_ORG = "AuthorBoard"
 SETTINGS_APP = "AuthorBoard"
@@ -847,50 +849,53 @@ class MainWindow(QMainWindow):
 
         box.exec()
         clicked = box.clickedButton()
-
         if clicked is save:
             self.save_project()
             return not self.dirty
-
         return clicked is discard
 
     def switch_language(self, code):
-        """Sprache wechseln: neues Hauptfenster in der neuen Sprache öffnen."""
+        """Restart AuthorBoard with a different UI language.
 
+        Asks to save first; if the user cancels, nothing happens.
+        """
         if code == i18n.current_language():
             return
 
-        book = self.current_book
-        legacy_file = None
+        old_ui = i18n.current_language()
+        # Ask first. If the user cancels, leave everything as it is (including
+        # the checked state of the language menu, which was already toggled by
+        # the QActionGroup).
+        if not self.on_shelf() and not self.maybe_save():
+            # Restore the menu checkmark to the current language.
+            self._lang_actions[i18n.current_language()].setChecked(True)
+            return
 
-        if not self.on_shelf():
-            if not self.maybe_save():
-                self._lang_actions[i18n.current_language()].setChecked(True)
-                return
-            self.finish_book()
-            self.clear_autosave()
-            if book is None:
-                legacy_file = self.current_file
-
+        # Persist the choice and the book to reopen.
         QSettings(SETTINGS_ORG, SETTINGS_APP).setValue("language", code)
-        i18n.set_language(code)
-        install_qt_translation(QApplication.instance(), code)
 
-        new = MainWindow()
-        new.setGeometry(self.geometry())
-        new.show()
-        _windows.append(new)
+        spell_lang = settings.get("spell_language")
+        if spell_lang in ("en", "de") and spell_lang == old_ui and code in ("en", "de"):
+            settings.set("spell_language", code, save=False)
 
-        if book is not None:
-            found = next((b for b in new.library.books if b.id == book.id), None)
-            if found is not None:
-                new.open_book(found)
-        elif legacy_file and os.path.exists(legacy_file):
-            new.load_file(legacy_file)
-            new.show_board()
+        book_id = self.current_book.id if self.current_book else None
+        if book_id:
+            QSettings(SETTINGS_ORG, SETTINGS_APP).setValue("reopen_book", book_id)
+        else:
+            QSettings(SETTINGS_ORG, SETTINGS_APP).remove("reopen_book")
 
+        # Flush QSettings to disk *before* launching the new process, otherwise
+        # the new process can read the old value if it starts before we exit.
+        QSettings(SETTINGS_ORG, SETTINGS_APP).sync()
+
+        # Close without prompting (we already prompted above).
         self._closing_for_switch = True
         self.close()
+
+        # Start the new instance.
+        program = sys.executable
+        arguments = [] if getattr(sys, "frozen", False) else [sys.argv[0]]
+        QProcess.startDetached(program, arguments)
 
     def _teardown(self):
         """Stop timers and remove the global event filter before closing."""
@@ -2202,7 +2207,7 @@ def main():
     """Create the application, set language and theme, show the main window."""
     app = QApplication(sys.argv)
     app.setApplicationName("AuthorBoard")
-    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.svg")
+    icon_path = resource_path(os.path.join("assets", "logo.svg"))
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))      # needs the Qt SVG plugin (part of PySide6)
     app.setStyle("Fusion")

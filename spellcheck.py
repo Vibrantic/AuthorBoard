@@ -53,20 +53,35 @@ class SpellEngine:
             return False
 
     def language(self):
-        """Active dictionary language code, or None when checking is off."""
         if not settings.get("spell_enabled") or not self.available():
             return None
+
         lang = settings.get("spell_language")
+        ui = current_language()
+
         if lang in LANGUAGES:
+            # If the stored language is the UI language, use it — that's
+            # almost certainly a follow-the-UI choice.  If it differs from
+            # the UI language, respect it as an explicit choice.
             return lang
-        ui = current_language()          # "auto": follow the interface language
+
+        # "auto" or unknown → follow the UI language.
         return ui if ui in LANGUAGES else "en"
 
     def _checker(self, lang):
-        """Create the checker for a language on first use (loading takes a moment)."""
-        if lang not in self._checkers:
+        """Create the checker for a language on first use (loading takes a moment).
+
+        If the checker cannot be constructed (e.g. its dictionary was not
+        bundled), remember the failure and return ``None``; callers treat
+        that as "spell checking unavailable".
+        """
+        if lang in self._checkers:
+            return self._checkers[lang]
+        try:
             from spellchecker import SpellChecker
             self._checkers[lang] = SpellChecker(language=lang)
+        except Exception:
+            self._checkers[lang] = None
         return self._checkers[lang]
 
     def _user_words(self):
@@ -91,10 +106,14 @@ class SpellEngine:
         if w in self._user_words():
             return False
 
+        checker = self._checker(lang)
+        if checker is None:                  # dictionary missing → do not flag
+            return False
+
         key = (lang, w)
         if key not in self._cache:
             base = w[:-2] if w.endswith("'s") else w
-            self._cache[key] = not self._checker(lang).known([base])
+            self._cache[key] = not checker.known([base])
         return self._cache[key]
 
     def suggestions(self, word, limit=6):
@@ -103,6 +122,8 @@ class SpellEngine:
         if lang is None:
             return []
         checker = self._checker(lang)
+        if checker is None:
+            return []
         cands = checker.candidates(word.lower()) or set()
         ranked = sorted(cands, key=lambda c: -checker.word_frequency[c])
         out = []

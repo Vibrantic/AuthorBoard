@@ -28,9 +28,10 @@ import ast
 import json
 import os
 import sys
+from resource import resource_path
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-LOCALE_DIR = os.path.join(BASE_DIR, "locales")
+LOCALE_DIR = resource_path("locales")
 SOURCE_LANG = "de"
 
 _current = SOURCE_LANG
