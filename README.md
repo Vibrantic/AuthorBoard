@@ -2,9 +2,13 @@
   <img src="assets/logo.svg" width="120" alt="AuthorBoard logo">
 </p>
 
+<div align="center>
+
 <img src="https://img.shields.io/badge/AI_Usage-GEN-ff4c4c?labelColor=555555&color=ff4c4c&style=flat-square" alt="AI Usage - GEN High">
 <img src="https://img.shields.io/badge/License-CC0_1.0-blue?style=flat-square&labelColor=555555" alt="GPL v3">
 <img src="https://img.shields.io/badge/Status-Active_Standard-brightgreen?style=flat-square&labelColor=555555" alt="Status">
+
+</div>
 
 <h1 align="center">AuthorBoard</h1>
 
