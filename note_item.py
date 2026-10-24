@@ -268,7 +268,7 @@ class NoteItem(QGraphicsRectItem):
             lines.append(tr("{n} Wörter", n=words))
         if m.locked:
             lines.append("🔒 " + tr("Gesperrt – Position fixiert"))
-        lines.append("<i>" + tr("Doppelklick: Pin setzen · Rechtsklick: Menü") + "</i>")
+        lines.append("<i>" + tr("Doppelklick: Notiz bearbeiten · Rechtsklick: Menü") + "</i>")
         self._tooltip_html = "<br>".join(lines)
         return self._tooltip_html
 
@@ -331,12 +331,19 @@ class NoteItem(QGraphicsRectItem):
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event):
-        """Qt event handler: double click."""
+        """Qt event handler: double click.
+
+        Opens the full-size editor (same action as the right-click menu's
+        "Open in large editor").  Pins are added only via the right-click
+        menu now.
+        """
         if (event.button() == Qt.MouseButton.LeftButton
                 and not self._in_grip(event.pos())):
-            self.add_pin(event.pos().x(), event.pos().y())
-            event.accept()
-            return
+            scene = self.scene()
+            if scene is not None and hasattr(scene, "edit_requested"):
+                scene.edit_requested.emit(self)
+                event.accept()
+                return
         super().mouseDoubleClickEvent(event)
 
     # ---------- Painting ----------

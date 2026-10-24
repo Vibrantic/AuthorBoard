@@ -1102,19 +1102,31 @@ class MainWindow(QMainWindow):
         return [i for i in self.scene.selectedItems() if isinstance(i, NoteItem)]
 
     def duplicate_selected(self):
+        """Ctrl+D: duplicate the selected notes and the threads between them.
 
-        """Ctrl+D: duplicate the selected notes."""
+        A thread is duplicated only when *both* of its endpoint notes were
+        also selected — the copy of a connected pair stays a connected pair,
+        but a note that was connected to something outside the selection is
+        copied without that thread.
+        """
         notes = self.selected_notes()
 
         if not notes:
             self.statusBar().showMessage(tr("Keine Notiz ausgewählt."), 3000)
             return
 
-        copies = [self.scene.duplicate_note(n) for n in notes]
+        old_to_new = {}
+        for note in notes:
+            copy = self.scene.duplicate_note(note)
+            old_to_new[note.model.id] = copy
 
+        self.scene.duplicate_connections(old_to_new)
+
+        # Select the copies (duplicate_note already selects each copy in turn;
+        # re-select all of them so the user sees the whole new group).
         self.scene.clearSelection()
-        for c in copies:
-            c.setSelected(True)
+        for copy in old_to_new.values():
+            copy.setSelected(True)
 
     def open_editor(self, note=None, focus_comment=None):
         """Open the full-size editor for ``note`` (default: the inspected note).

@@ -347,7 +347,7 @@
   "{n} Wörter": "{n} words",
   "Ziehen: Größe ändern": "Drag: resize",
   "Gesperrt – Position fixiert": "Locked – position fixed",
-  "Doppelklick: Pin setzen · Rechtsklick: Menü": "Double-click: add pin · Right-click: menu",
+  "Doppelklick: Notiz bearbeiten · Rechtsklick: Menü": "Double-click: edit note · Right-click: menu",
   "Notizart suchen … (z. B. Charakter, Ort, Kapitel)": "Find note type … (e.g. Character, Place, Chapter)",
   "↑ ↓ wählen    ⏎ erstellen    Esc schließen": "↑ ↓ select    ⏎ create    Esc close",
   "Tippen filtert die Notizarten. Gibt es keinen Treffer,\nkann eine neue Notizart angelegt werden.": "Typing filters the note types. If there is no match,\na new note type can be created.",
@@ -466,5 +466,9 @@
   "AuthorBoard entstand in einer fortlaufenden Zusammenarbeit zwischen einem menschlichen Maintainer und zwei KI-Assistenten: <b>Konzept, Richtung und Übersicht</b> durch die Autorinnen und Autoren des Projekts, <b>erste Umsetzung, Architektur, Handbuch und Beispielprojekte</b> durch <b>Claude</b> (Anthropic), <b>Performance-Arbeit, Level-of-Detail-Rendering, Zeitleisten-Neufassung, Undo-Umbau und Fehlerbehebungen</b> durch <b>DeepSeek</b>.": "AuthorBoard was built in an ongoing collaboration between a human maintainer and two AI assistants: <b>concept, direction and oversight</b> by the project's authors, <b>initial implementation, architecture, user manual and showcase</b> by <b>Claude</b> (Anthropic), <b>performance work, level-of-detail rendering, timeline rewrite, undo restructuring and bug fixes</b> by <b>DeepSeek</b>.",
   "Jede Funktion, jedes Layout und jede Leistungsverbesserung wurde vom Maintainer angestoßen, ausprobiert und abgenommen. Die Umsetzung entstand im Dialog mit diesem Feedback und wurde nach jedem Schritt geprüft – von der ersten Veröffentlichung über die Leistungsüberarbeitung bis zu den letzten Detailkorrekturen.": "Every feature, every layout decision and every performance improvement was proposed, tried and signed off by the maintainer. The implementation was produced in dialogue with that feedback and checked after every step – from the initial release through the performance overhaul to the final polish.",
   "Danksagung": "Acknowledgements",
-  "Dank an alle, die AuthorBoard ausprobiert, Fehler gemeldet und Verbesserungen vorgeschlagen haben. Die Projektgeschichte ist im Git-Verlauf einsehbar.": "Thanks to everyone who tried AuthorBoard, reported bugs and suggested improvements. The project history is visible in the git log."
+  "Dank an alle, die AuthorBoard ausprobiert, Fehler gemeldet und Verbesserungen vorgeschlagen haben. Die Projektgeschichte ist im Git-Verlauf einsehbar.": "Thanks to everyone who tried AuthorBoard, reported bugs and suggested improvements. The project history is visible in the git log.",
+  "Verbundene Notizen auswählen": "Select connected notes",
+  "Diese Notiz und alle direkt verbundenen Notizen auswählen": "Select this note and every directly connected note",
+  "Verbundene Notizen rekursiv auswählen": "Select connected notes recursively",
+  "Diese Notiz und alles, was über Fäden damit zusammenhängt": "Select this note and everything reachable from it by threads"
 }

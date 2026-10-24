@@ -23,8 +23,8 @@ Performance notes (Optimization.md)
     MIN_ZOOM).
 """
 
-from PySide6.QtCore import Qt, QLineF, QPointF, QRectF, Signal, QTimer
-from PySide6.QtGui import QColor, QPen, QPainter, QTransform, QPixmap, QBrush
+from PySide6.QtCore import Qt, QLineF, QPointF, QRectF, Signal, QTimer, QItemSelectionModel
+from PySide6.QtGui import QColor, QPen, QPainter, QTransform, QPixmap, QBrush, QPainterPath
 from PySide6.QtWidgets import (
     QColorDialog,
     QInputDialog,
@@ -268,7 +268,13 @@ class BoardScene(QGraphicsScene):
         self.interaction_finished.emit()
 
     def duplicate_note(self, note):
-        """Kopie einer Notiz (ohne Fäden) leicht versetzt anlegen."""
+        """Kopie einer Notiz (ohne Fäden) leicht versetzt anlegen.
+
+        Threads are duplicated by :meth:`duplicate_connections`, which the
+        caller (``MainWindow.duplicate_selected``) invokes after copying
+        all selected notes, so a thread is only duplicated when both of its
+        endpoints were duplicated.
+        """
         src = note.model
         data = NoteData(
             title=src.title, content=src.content,
@@ -284,10 +290,13 @@ class BoardScene(QGraphicsScene):
             comments=[CommentData(c.id, c.text, c.quote, c.created) for c in src.comments],
         )
         copy = self.add_note_item(data)
+
         self.clearSelection()
         copy.setSelected(True)
+
         self.notes_changed.emit()
         self.interaction_finished.emit()
+
         return copy
 
     def arrange_by_type(self):
@@ -470,6 +479,122 @@ class BoardScene(QGraphicsScene):
                     keep.add(c.start_pin.note)
                     keep.add(c.end_pin.note)
         return keep, set(selected)
+
+    def select_connected(self, note, recursive=False):
+        """Select a note and the notes connected to it by threads.
+
+        With ``recursive=False`` (default), only direct neighbours are
+        selected.  With ``recursive=True``, the walk continues through every
+        neighbour until no new note is reachable — the whole connected
+        component.
+
+        The selection is applied in a single batch so the per-selection
+        handler doesn't run between iterations and leave the scene
+        half-selected.
+        """
+        if note is None or note.scene() is not self:
+            return
+
+        if recursive:
+            # Build an adjacency map once so the walk is O(N + E) instead of
+            # O(N × E).
+            adjacency = {}
+            for c in self.connection_items:
+                a = c.start_pin.note
+                b = c.end_pin.note
+                adjacency.setdefault(a, []).append(b)
+                adjacency.setdefault(b, []).append(a)
+
+            selected = {note}
+            frontier = [note]
+            while frontier:
+                current = frontier.pop()
+                for other in adjacency.get(current, ()):
+                    if other not in selected and other.scene() is self:
+                        selected.add(other)
+                        frontier.append(other)
+        else:
+            selected = {note}
+            for c in self.connection_items:
+                if c.start_pin.note is note:
+                    other = c.end_pin.note
+                elif c.end_pin.note is note:
+                    other = c.start_pin.note
+                else:
+                    continue
+                if other.scene() is self:
+                    selected.add(other)
+
+        self.blockSignals(True)
+        try:
+            self.clearSelection()
+            for n in selected:
+                n.setSelected(True)
+        finally:
+            self.blockSignals(False)
+
+        self.on_selection_changed()
+        self.notes_changed.emit()
+
+    def select_connected_recursive(self, note):
+        """Select a note and every note reachable from it by any number of threads."""
+        if note is None or note.scene() is not self:
+            return
+        self.clearSelection()
+        note.setSelected(True)
+        seen = {note}
+        stack = [note]
+        while stack:
+            current = stack.pop()
+            for other, _label in current.links():
+                if other in seen or other.scene() is not self:
+                    continue
+                seen.add(other)
+                other.setSelected(True)
+                stack.append(other)
+
+    def duplicate_connections(self, old_to_new):
+        """Recreate threads whose both endpoints are on duplicated notes.
+
+        ``old_to_new`` maps ``old_note_id -> new_NoteItem``.  A thread is
+        recreated if and only if *both* of its endpoint notes are in this
+        map.  Threads that connect a duplicated note to a note that was
+        not duplicated are left alone — the original note keeps its
+        connection, the copy has no thread.
+        """
+        # Map old pin ids to the corresponding new pins.  Pins are copied
+        # 1:1 in order, so index-by-index matching is exact.
+        old_pin_to_new = {}
+        for old_id, copy in old_to_new.items():
+            old_note = self.note_lookup.get(old_id)
+            if old_note is None or copy is None:
+                continue
+            if len(old_note.pins) != len(copy.pins):
+                continue
+            for old_pin, new_pin in zip(old_note.pins, copy.pins):
+                old_pin_to_new[old_pin.model.id] = new_pin
+
+        # Snapshot the connection list — add_connection appends to it and we
+        # don't want to visit the newly created ones.
+        for connection in list(self.connection_items):
+            start_old = connection.start_pin.model.id
+            end_old = connection.end_pin.model.id
+            new_start = old_pin_to_new.get(start_old)
+            new_end = old_pin_to_new.get(end_old)
+            if new_start is None or new_end is None:
+                continue                       # at least one endpoint not duplicated
+            if new_start is new_end:
+                continue                       # no self-loops from this pass
+            data = ConnectionData(
+                start_pin_id=new_start.model.id,
+                end_pin_id=new_end.model.id,
+                color=connection.model.color,
+                label=connection.model.label,
+            )
+            self.add_connection(data, new_start, new_end)
+
+        self.reapply_filter()
+        self.notes_changed.emit()
 
     def reapply_filter(self):
         """Recompute opacity of every note and thread.
@@ -681,6 +806,24 @@ class BoardScene(QGraphicsScene):
                 lambda _=False: self.edit_requested.emit(item))
             menu.addAction(tr("Duplizieren")).triggered.connect(
                 lambda _=False: self.duplicate_note(item))
+
+            # Only useful if the note actually has neighbours.
+            has_connections = bool(item.links())
+            select_direct = menu.addAction(tr("Verbundene Notizen auswählen"))
+            select_direct.setEnabled(has_connections)
+            select_direct.setToolTip(
+                tr("Diese Notiz und alle direkt verbundenen Notizen auswählen"))
+            select_direct.triggered.connect(
+                lambda _=False: self.select_connected(item))
+
+            select_recursive = menu.addAction(
+                tr("Verbundene Notizen rekursiv auswählen"))
+            select_recursive.setEnabled(has_connections)
+            select_recursive.setToolTip(
+                tr("Diese Notiz und alles, was über Fäden damit zusammenhängt"))
+            select_recursive.triggered.connect(
+                lambda _=False: self.select_connected(item, recursive=True))
+
             menu.addSeparator()
             menu.addAction(tr("Pin hier hinzufügen")).triggered.connect(
                 lambda _=False: item.add_pin(local.x(), local.y()))
