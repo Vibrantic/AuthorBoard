@@ -1,15 +1,6 @@
 <p align="center">
   <img src="assets/logo.svg" width="120" alt="AuthorBoard logo">
 </p>
-
-<div align="center>
-
-<img src="https://img.shields.io/badge/AI_Usage-GEN-ff4c4c?labelColor=555555&color=ff4c4c&style=flat-square" alt="AI Usage - GEN High">
-<img src="https://img.shields.io/badge/License-CC0_1.0-blue?style=flat-square&labelColor=555555" alt="GPL v3">
-<img src="https://img.shields.io/badge/Status-Active_Standard-brightgreen?style=flat-square&labelColor=555555" alt="Status">
-
-</div>
-
 <h1 align="center">AuthorBoard</h1>
 
 <p align="center">
@@ -18,15 +9,29 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img alt="License: GPL v3" src="https://img.shields.io/badge/license-GPL%20v3-blue.svg"></a>
-  <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-3776AB.svg?logo=python&logoColor=white">
-  <img alt="Qt 6 / PySide6" src="https://img.shields.io/badge/Qt-6%20(PySide6)-41CD52.svg?logo=qt&logoColor=white">
-  <img alt="Languages: English, German" src="https://img.shields.io/badge/UI-English%20%7C%20Deutsch-orange.svg">
-  <img alt="Platforms" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg">
+  <a href="LICENSE"><img alt="License: GPL v3" src="https://img.shields.io/badge/license-GPL%20v3-blue.svg?style=flat-square&"></a>
+  <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-3776AB.svg?style=flat-square&logo=python&logoColor=white">
+  <img alt="Qt 6 / PySide6" src="https://img.shields.io/badge/Qt-6%20(PySide6)-41CD52.svg?style=flat-square&logo=qt&logoColor=white">
+  <img alt="Languages: English, German" src="https://img.shields.io/badge/UI-English%20%7C%20Deutsch-orange.svg?style=flat-square">
+  <img alt="Platforms" src="https://img.shields.io/badge/platform-Windows-lightgrey.svg?style=flat-square">
+  <img src="https://img.shields.io/badge/AI_Usage-GEN-ff4c4c?style=flat-square&labelColor=555555&color=ff4c4c" alt="AI Usage - GEN High">
+  <img src="https://img.shields.io/badge/Status-Active_Standard-brightgreen?style=flat-square&labelColor=555555" alt="Status">
 </p>
 
 <p align="center">
   <img src="docs/images/board.png" alt="AuthorBoard board with notes, pins, threads and timeline" width="900">
+</p>
+
+---
+---
+
+<div align="center">
+<h2>AI TRANSPARENCY ACT</h2>
+<img src="https://github.com/Vibrantic/Ai-Transparancy-Act/blob/509531c8e6651785a2db88a650e52ad7f6c591d9/labels/AiGenerated_High.svg" alt="AI Generated High" width="128" height="128">
+</div>
+
+<p align="left">
+In line with the transparency principles of <a href="https://github.com/Vibrantic/Ai-Transparancy-Act">"Ai Transparancy Act"</a>, please note that this Software was generated using <a href="https://www.anthropic.com">Anthropic (Claude AI)</a> and <a href="https://www.deepseek.com/en/">DeepSeek AI</a>. All content has been manually reviewed and verified by the maintainer.
 </p>
 
 ---
