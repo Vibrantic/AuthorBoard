@@ -78,6 +78,7 @@ class NoteItem(QGraphicsRectItem):
         # Cached paper path (rebuilt when the note is resized)
         self._paper_path = None
         self._paper_path_size = None
+        self._grip_cursor = False
 
         self.setFlags(
             QGraphicsItem.GraphicsItemFlag.ItemIsMovable
@@ -112,7 +113,9 @@ class NoteItem(QGraphicsRectItem):
     # ---------- Cache invalidation ----------
 
     def model_changed(self):
+
         """The note's data changed: drop caches and repaint."""
+        print("model_changed:", self.model.title)
         self.model.touch()
         self._tooltip_html = None
         self._haystack = None
@@ -171,7 +174,7 @@ class NoteItem(QGraphicsRectItem):
         self.model.locked = locked
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, not locked)
         self.unsetCursor()
-        self.update()
+        self.model_changed()
 
     def resize_to(self, width, height):
         """Resize the note (minimum size enforced, pins stay inside)."""
@@ -190,7 +193,7 @@ class NoteItem(QGraphicsRectItem):
         scene = self.scene()
         if scene is not None and hasattr(scene, "invalidate_note_rect"):
             scene.invalidate_note_rect(self)
-        self.update()
+        self.model_changed()
 
     def type_info(self):
         """NoteTypeData of this note's type (None when unknown)."""
@@ -278,18 +281,20 @@ class NoteItem(QGraphicsRectItem):
         super().hoverEnterEvent(event)
 
     def hoverMoveEvent(self, event):
-        """Qt event handler: the pointer moves over the item."""
-        if self._in_grip(event.pos()):
-            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
-            self.setToolTip(tr("Ziehen: Größe ändern"))
-        else:
-            self.unsetCursor()
-            if self._tooltip_html is None:
+        in_grip = self._in_grip(event.pos())
+        if in_grip != self._grip_cursor:
+            self._grip_cursor = in_grip
+            if in_grip:
+                self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+                self.setToolTip(tr("Ziehen: Größe ändern"))
+            else:
+                self.unsetCursor()
                 self.setToolTip(self.tooltip_text())
         super().hoverMoveEvent(event)
 
     def hoverLeaveEvent(self, event):
         """Qt event handler: the pointer left the item."""
+        self._grip_cursor = False
         self.unsetCursor()
         super().hoverLeaveEvent(event)
 
@@ -321,7 +326,7 @@ class NoteItem(QGraphicsRectItem):
     def mouseReleaseEvent(self, event):
         if self._resizing:
             self._resizing = False
-            # Re-enable move-drag (unless the note is locked).
+            self._grip_cursor = False
             self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
                          not self.model.locked)
             self.unsetCursor()
@@ -530,9 +535,9 @@ class NoteItem(QGraphicsRectItem):
                 x += tw + 5
 
     def focusOutEvent(self, event):
-        """Qt event handler: focus left the item."""
         if self._resizing:
             self._resizing = False
+            self._grip_cursor = False
             self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
                          not self.model.locked)
             self.unsetCursor()

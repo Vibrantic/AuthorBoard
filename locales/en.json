@@ -462,7 +462,6 @@
   "{n} Notizen ohne Datum": "{n} notes without a date",
   "Beschriftung immer anzeigen": "Always show label",
   "Ziehen, um die Höhe der Liste zu ändern": "Drag to change the height of the list",
-  "Entwicklung": "Development",
   "AuthorBoard entstand in einer fortlaufenden Zusammenarbeit zwischen einem menschlichen Maintainer und zwei KI-Assistenten: <b>Konzept, Richtung und Übersicht</b> durch die Autorinnen und Autoren des Projekts, <b>erste Umsetzung, Architektur, Handbuch und Beispielprojekte</b> durch <b>Claude</b> (Anthropic), <b>Performance-Arbeit, Level-of-Detail-Rendering, Zeitleisten-Neufassung, Undo-Umbau und Fehlerbehebungen</b> durch <b>DeepSeek</b>.": "AuthorBoard was built in an ongoing collaboration between a human maintainer and two AI assistants: <b>concept, direction and oversight</b> by the project's authors, <b>initial implementation, architecture, user manual and showcase</b> by <b>Claude</b> (Anthropic), <b>performance work, level-of-detail rendering, timeline rewrite, undo restructuring and bug fixes</b> by <b>DeepSeek</b>.",
   "Jede Funktion, jedes Layout und jede Leistungsverbesserung wurde vom Maintainer angestoßen, ausprobiert und abgenommen. Die Umsetzung entstand im Dialog mit diesem Feedback und wurde nach jedem Schritt geprüft – von der ersten Veröffentlichung über die Leistungsüberarbeitung bis zu den letzten Detailkorrekturen.": "Every feature, every layout decision and every performance improvement was proposed, tried and signed off by the maintainer. The implementation was produced in dialogue with that feedback and checked after every step – from the initial release through the performance overhaul to the final polish.",
   "Danksagung": "Acknowledgements",
@@ -470,5 +469,14 @@
   "Verbundene Notizen auswählen": "Select connected notes",
   "Diese Notiz und alle direkt verbundenen Notizen auswählen": "Select this note and every directly connected note",
   "Verbundene Notizen rekursiv auswählen": "Select connected notes recursively",
-  "Diese Notiz und alles, was über Fäden damit zusammenhängt": "Select this note and everything reachable from it by threads"
+  "Diese Notiz und alles, was über Fäden damit zusammenhängt": "Select this note and everything reachable from it by threads",
+  "FlowView öffnen": "Open FlowView",
+  "FlowView …": "FlowView …",
+  "Ausgewählte Notiz und ihre Verbindungen als Fluss öffnen": "Open the selected note and its connections as a flow",
+  "FlowView": "FlowView",
+  "Als Wurzel setzen": "Set as root",
+  "Wurzel": "Root",
+  "Notizen suchen …": "Search notes …",
+  "Klick auf einen Namen: aktive Notiz öffnet, grauer Punkt zeigt den Pfad dorthin.": "Click a name: active notes jump there, grey dots show the path.",
+  "Ansicht zurücksetzen": "Reset view"
 }

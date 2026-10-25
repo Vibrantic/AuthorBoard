@@ -19,6 +19,8 @@ import os
 import subprocess
 import sys
 
+import flow_view
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SEP = ";"   # PyInstaller --add-data / --add-binary use ';' on Windows
 
@@ -51,6 +53,7 @@ HIDDEN = [
     "models", "storage", "undo", "settings", "settings_dialog",
     "help_dialog", "about_dialog", "i18n", "theme", "widgets",
     "palette", "stats", "manuscript", "export", "version", "resource",
+    "flow_view",
 ]
 
 

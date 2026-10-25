@@ -129,6 +129,7 @@ import i18n
 from i18n import tr, N_
 from storage import FORMAT_VERSION, Storage
 from resource import resource_path
+from flow_view import FlowViewDialog
 
 SETTINGS_ORG = "AuthorBoard"
 SETTINGS_APP = "AuthorBoard"
@@ -217,6 +218,7 @@ class MainWindow(QMainWindow):
         self.attachments = AttachmentStore()   # bytes of all attachments of the open book
         self.known_tags = set()                # tag auto-completion memory (per book)
         self._help = None                      # help window (created on first use)
+        self._flow_view = None                 # FlowViewDialog instance, if open
 
 
         # Gemeinsames Notizarten-Register (wird auch von Szene/Inspector genutzt)
@@ -277,6 +279,10 @@ class MainWindow(QMainWindow):
         self.scene.note_created.connect(
             lambda _n: QTimer.singleShot(60, self.inspector.focus_title)
         )
+        self.scene.flow_requested.connect(self.open_flow_view)
+
+        # self.scene.structure_changed.connect(lambda: print("structure changed"))
+        # self.scene.note_content_changed.connect(lambda n: print("content changed:", n.model.title))
 
         self.inspector.note_modified.connect(self.schedule_refresh)
         self.inspector.note_modified.connect(self.schedule_checkpoint)
@@ -315,6 +321,7 @@ class MainWindow(QMainWindow):
         self.apply_mode()
 
         QTimer.singleShot(300, self.check_recovery)
+
 
     # ------------------------------------------------------------ Aufbau
 
@@ -537,12 +544,15 @@ class MainWindow(QMainWindow):
         self.act_fit = self._action(tr("Alles anzeigen"), "Ctrl+0", self.view.fit_all)
         self.act_zoom = self._action(tr("Zoom zurücksetzen"), "Ctrl+1", self.view.reset_zoom)
         self.act_arrange = self._action(tr("Nach Notizart anordnen"), None, self.arrange_notes)
+        self.act_flow = self._action(tr("FlowView …"), "Ctrl+T", self.open_flow_view)
+        self._tip(self.act_flow, tr("Ausgewählte Notiz und ihre Verbindungen als Fluss öffnen"))
         self.act_stats = self._action(tr("Statistik …"), "Ctrl+I", self.show_stats)
 
         view_menu.addAction(self.act_fit)
         view_menu.addAction(self.act_zoom)
         view_menu.addSeparator()
         view_menu.addAction(self.act_arrange)
+        view_menu.addAction(self.act_flow)
 
         self.act_snap = QAction(tr("Am Raster ausrichten"), self)
         self.act_snap.setCheckable(True)
@@ -602,6 +612,7 @@ class MainWindow(QMainWindow):
             self.act_palette, self.act_duplicate, self.act_editor, self.act_find,
             self.act_fit, self.act_zoom, self.act_arrange, self.act_snap,
             self.act_stats, self.act_timeline, self.act_lock, self.act_focus,
+            self.act_flow,
         ]
 
         self._tip(self.act_shelf, tr("Zurück zur Startseite mit dem Bücherregal (Strg+B)"))
@@ -1153,7 +1164,7 @@ class MainWindow(QMainWindow):
         m.comments[:] = dialog.result_comments()
         m.attachments = dialog.result_attachments()
         note.model.touch()
-        note.update()
+        note.model_changed()
 
         if self.inspector.note is note:
             self.inspector.set_note(note)
@@ -1161,14 +1172,43 @@ class MainWindow(QMainWindow):
         self.schedule_refresh()
         self.schedule_checkpoint()
 
+    def open_flow_view(self, note=None):
+        """Open (or re-root) the FlowView on ``note``.
+
+        The dialog is non-modal and single-instance: requesting FlowView while
+        one is already open raises it and re-roots it instead of opening a
+        second window.
+        """
+        if not isinstance(note, NoteItem):
+            note = self.inspector.note
+        if note is None or note.scene() is not self.scene:
+            self.statusBar().showMessage(tr("Keine Notiz ausgewählt."), 3000)
+            return
+
+        if self._flow_view is not None and self._flow_view.isVisible():
+            self._flow_view.set_root(note)
+            self._flow_view.raise_()
+            self._flow_view.activateWindow()
+            return
+
+        self._flow_view = FlowViewDialog(
+            self.scene, self.attachments, note,
+            parent=self,
+            note_types=self.note_types,
+        )
+        self._flow_view.finished.connect(self._on_flow_view_closed)
+        self._flow_view.show()
+
+    def _on_flow_view_closed(self, _result=None):
+        self._flow_view = None
+
     def delete_comment(self, note, comment_id):
         """Delete a comment (from the comments panel) incl. its text marker."""
         m = note.model
         m.comments[:] = [c for c in m.comments if c.id != comment_id]
         if m.rich:
             m.rich = remove_comment_marker(m.rich, comment_id)
-            m.touch()
-        note.update()
+        note.model_changed()
         if self.inspector.note is note:
             self.inspector.set_note(note)
         self.schedule_refresh()
@@ -1581,8 +1621,8 @@ class MainWindow(QMainWindow):
     def on_note_selected(self, note):
 
         """The scene's selection changed: show the note in the inspector."""
-        QTimer.singleShot(0, self.view.unsetCursor)
         self.inspector.set_note(note)
+        self.act_flow.setEnabled(note is not None and not self.on_shelf())
 
         if note is not None:
             self.select_in_tree(note.model.id)
@@ -1667,6 +1707,10 @@ class MainWindow(QMainWindow):
         if not self.maybe_save():
             return False
 
+        if self._flow_view is not None:
+            self._flow_view.close()
+            self._flow_view = None
+
         self.finish_book()
         self.clear_autosave()
 
@@ -1721,6 +1765,10 @@ class MainWindow(QMainWindow):
     def open_book(self, book):
 
         """Load a book from the library and show its board."""
+
+        if not self.show_shelf():
+            return
+
         if not self.on_shelf() and not self.show_shelf():
             return
 
@@ -2212,6 +2260,29 @@ class MainWindow(QMainWindow):
             self.timeline._fitted = False
             self.refresh_timeline()
             self.view.fit_all()
+
+        self.scene.structure_changed.emit()
+
+    def changeEvent(self, event):
+        """Qt event handler: window state changed (maximised / restored).
+
+        Ends any active board pan *before* Qt touches layout — otherwise a
+        stale mouse grab or stale ``_panning`` flag can leave the cursor
+        showing the grab icon after the window is maximised."""
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            try:
+                self.view._end_pan_if_active()
+            except Exception:
+                pass
+
+    def resizeEvent(self, event):
+        """Qt event handler: the window was resized."""
+        super().resizeEvent(event)
+        try:
+            self.view._end_pan_if_active()
+        except Exception:
+            pass
 
 
 def main():

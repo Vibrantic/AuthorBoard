@@ -388,8 +388,7 @@ class InspectorWidget(QWidget):
         """Common tail of every edit: repaint the note and notify the window."""
         if self._loading or self.note is None:
             return
-        self.note.model.touch()      # bump revision, drop word cache
-        self.note.update()
+        self.note.model_changed()
         self.note_modified.emit(self.note)
 
     def _update_color_button(self):

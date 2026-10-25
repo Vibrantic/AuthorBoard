@@ -69,8 +69,11 @@ In line with the transparency principles of <a href="https://github.com/Vibranti
 **See the story**
 - 🕒 **Horizontal timeline** - dots in the colour of the note, information bubble on click, zoom and pan. Smooth on boards with thousands of dated notes.
 - 📊 **Statistics** - words per note type, status, tags, longest and most connected notes, daily progress.
+- 🧭 **FlowView** - open any note (right-click → *FlowView öffnen*, or *View → FlowView*, `Ctrl+T`) for a focused, zoomable view of that note and its neighbours. Walk the graph one hop at a time by clicking the ▶ arrow on any neighbour; the embedded Inspector edits both root and neighbours without leaving the window.
+- 🗺 **FlowView minimap** - the whole connected component at a glance in the corner of the FlowView. Filled dots are the current root and its neighbours (click to jump); hollow dots are further notes (click to highlight the shortest path to them). Amber lines show the walk, everything off the path dims so the next step is obvious, and ◀ / ▶ at the bottom-left step you along the path or back through your root history.
+- 🔎 **FlowView note list** - a searchable, resizable list of every note shown on the minimap, docked beside it. Active notes re-root on click; silhouettes toggle the path highlight. The selected silhouette is tinted the same amber as the path.
 
-**Stay safe**
+- **Stay safe**
 - ↩️ **Undo / redo** for everything, a **save prompt** for unsaved changes, **autosave** with crash recovery (written off the UI thread) and automatic **backups**.
 - 📤 **Export** - manuscript (Markdown, text, HTML, **PDF**; HTML/PDF keep formatting and images), outline as Markdown, board as PNG.
 - 🌍 **Two languages (English / Deutsch)** switchable at runtime and easy to extend.

@@ -1,5 +1,77 @@
 # Changelog
 
+## 1.2.0
+
+**New**
+
+- **FlowView** — a non-modal, zoomable window that shows the current
+  root note and its direct neighbours in pin order. Click ▶ on a
+  neighbour to re-root; right-click a thread to delete it (the
+  neighbour that loses its only connection disappears from the view).
+  Every node is fully editable through the embedded Inspector, so both
+  root and neighbours can be edited without leaving FlowView.
+  Right-click a note on the board → *FlowView öffnen*, or use
+  *View → FlowView (Ctrl+T)* with a note selected.
+
+- **FlowView minimap** — a compact 240×240 overview in the bottom-left
+  corner of the FlowView, always showing the whole connected component
+  of the current root. The root and its direct neighbours are drawn as
+  filled "active" dots (click = re-root); up to 30 further notes are
+  drawn as hollow "silhouette" dots, ordered by BFS distance from the
+  root. Hover any dot for the note title.
+
+- **Path highlight** — clicking a silhouette dot (or its entry in the
+  note list) highlights the shortest path from the root to that note as
+  a poly-line through the dots of every intermediate note. Clicking an
+  active neighbour steps along that path; when the destination becomes
+  the root, the highlight clears. Only one silhouette can be selected
+  at a time — selecting a different one replaces the path.
+
+- **Path dimming in FlowView** — while a silhouette is selected, every
+  FlowView node and thread that is not part of the highlighted path
+  dims to 0.25 / 0.1. This makes the walk "pop" out of the graph so the
+  user can see at a glance which neighbour to click next. The dim
+  recomputes on every re-root.
+
+- **Path navigation buttons** — ◀ / ▶ at the bottom-left of the
+  minimap step one hop back / forward along the highlighted path. When
+  no silhouette is selected, they fall back to walking the root
+  history, so the user can always undo the last re-root even after
+  reaching the destination.
+
+- **Note list panel** — a searchable list of every note shown on the
+  minimap, docked to the right of it at the same height and resizable
+  on its right edge. Active notes are prefixed with `●` and re-root
+  the FlowView when clicked; silhouettes are prefixed with `○` and
+  toggle the path highlight. The selected silhouette is highlighted in
+  the same amber as the minimap path. A search box filters the list in
+  real time; `Enter` clears the filter, `Esc` clears and returns focus
+  to the list.
+
+- **Selection lock while a path is active** — while a silhouette is
+  selected, clicks on FlowView nodes and threads no longer change the
+  selection. The ▶ arrows on neighbour nodes still work, so re-rooting
+  along the path is not blocked. This prevents the user from
+  accidentally breaking the path highlight mid-walk.
+
+- **Bidirectional sync** — the FlowView, minimap and note list always
+  agree on the current root, its active neighbours, the selected
+  silhouette and its path, regardless of which of the three the user
+  clicked. A root change through the FlowView (▶ arrow, "Als Wurzel
+  setzen", inspector jump, or an external board change) refreshes the
+  minimap and list immediately; a click in the minimap or list updates
+  the FlowView just as immediately.
+
+- **Inspector width when maximised** — the embedded Inspector in the
+  FlowView is pinned to 500 px when the window is maximised or in
+  full-screen, so a wide monitor does not give the inspector an
+  oversized share of the screen. At normal window sizes the splitter
+  keeps its proportional 3:1 layout.
+
+**Fixed**
+- **Cursor Visual Bug** - fixed where sometimes the icon got locked either 
+  to cursor or hand depending on what action was executed.
+
 ## 1.1.1
 
 Bug fixes and two small UX features. No file-format changes; existing

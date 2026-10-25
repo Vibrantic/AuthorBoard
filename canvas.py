@@ -21,11 +21,47 @@ Performance notes (Optimization.md)
 *   ``BoardView`` uses ``SmartViewportUpdate``; wheel zoom works from any
     starting state (including fit-all that would otherwise land below
     MIN_ZOOM).
+
+Panning
+-------
+``BoardView`` pan is a middle-button drag.  Movement is applied by nudging
+the scroll bars (``h.setValue(h.value() - dx)``) rather than by translating
+the transform: scroll-bar values are in screen pixels, so the content tracks
+the cursor 1:1 at any zoom.  The scene rect is huge (set by ``MainWindow``),
+so this never clamps.
+
+Ending the pan is done via an **application-level event filter** installed
+only while the pan is active.  We do *not* use ``grabMouse()``: it is
+unreliable across platforms (macOS needs an active window, Windows can
+silently fail if another widget holds the grab), and it interferes with
+``QGraphicsView``'s normal item delivery.  The filter catches the middle
+button release *wherever it lands* — over a note, over a child widget, or
+outside the window — and ends the pan cleanly.  A 5 s inactivity watchdog
+covers the last case (a release swallowed by a system dialog).
 """
 
-from PySide6.QtCore import Qt, QLineF, QPointF, QRectF, Signal, QTimer, QItemSelectionModel
-from PySide6.QtGui import QColor, QPen, QPainter, QTransform, QPixmap, QBrush, QPainterPath
+from PySide6.QtCore import (
+    Qt,
+    QEvent,
+    QLineF,
+    QPointF,
+    QRectF,
+    Signal,
+    QTimer,
+    QItemSelectionModel,
+)
+from PySide6.QtGui import (
+    QColor,
+    QPen,
+    QPainter,
+    QTransform,
+    QPixmap,
+    QBrush,
+    QPainterPath,
+    QGuiApplication,
+)
 from PySide6.QtWidgets import (
+    QApplication,
     QColorDialog,
     QInputDialog,
     QFrame,
@@ -74,6 +110,11 @@ class BoardScene(QGraphicsScene):
     note_created = Signal(object)
     edit_requested = Signal(object)
     interaction_finished = Signal()
+
+    structure_changed = Signal()
+    note_content_changed = Signal(object)
+
+    flow_requested = Signal(object)
 
     def __init__(self, parent=None):
         """Create an empty scene; ``note_types`` is filled by the main window."""
@@ -350,6 +391,7 @@ class BoardScene(QGraphicsScene):
             self._emit_selected(None)
         self.removeItem(note)
         self.notes_changed.emit()
+        self.structure_changed.emit()
 
     # ------------------------------------------------------------- Fäden
 
@@ -386,6 +428,7 @@ class BoardScene(QGraphicsScene):
             self.connection_items.remove(connection)
         if connection.scene() is self:
             self.removeItem(connection)
+        self.structure_changed.emit()
 
     def delete_selected(self):
         """Delete everything that is selected (notes, pins, threads)."""
@@ -464,6 +507,27 @@ class BoardScene(QGraphicsScene):
             if note is not None and note not in notes:
                 notes.append(note)
         return notes
+
+    def direct_neighbours(self, note):
+        """Return ``[(pin_index, other_note, connection_item), …]``.
+
+        The list is ordered by:
+        1. the pin index on ``note`` (i.e. the visual order of pins on the
+           note itself),
+        2. the order of connections on that pin.
+
+        Duplicates (two threads between the same pair of pins) are kept —
+        they represent distinct connections and the FlowView shows them
+        as distinct edges.
+        """
+        if note is None or note.scene() is not self:
+            return []
+        out = []
+        for pin_index, pin in enumerate(note.pins):
+            for c in pin.connections:
+                other = c.end_pin if c.start_pin is pin else c.start_pin
+                out.append((pin_index, other.note, c))
+        return out
 
     def _focus_set(self):
         """Notes to keep visible in focus mode.  None = focus mode inactive."""
@@ -804,6 +868,8 @@ class BoardScene(QGraphicsScene):
             local = item.mapFromScene(scene_pos)
             menu.addAction(tr("Im großen Editor öffnen")).triggered.connect(
                 lambda _=False: self.edit_requested.emit(item))
+            menu.addAction(tr("FlowView öffnen")).triggered.connect(
+                lambda _=False: self.flow_requested.emit(item))
             menu.addAction(tr("Duplizieren")).triggered.connect(
                 lambda _=False: self.duplicate_note(item))
 
@@ -836,7 +902,7 @@ class BoardScene(QGraphicsScene):
 
             def set_status(key):
                 item.model.status = key
-                item.update()
+                item.model_changed()
                 self._emit_selected(self._current_note, force=True)
                 self.notes_changed.emit()
 
@@ -849,7 +915,7 @@ class BoardScene(QGraphicsScene):
 
             def set_note_color(c):
                 item.model.color = c
-                item.update()
+                item.model_changed()
                 self._emit_selected(self._current_note, force=True)
 
             self._add_color_menu(menu, tr("Notizfarbe"), item.model.color, set_note_color)
@@ -871,10 +937,29 @@ class BoardScene(QGraphicsScene):
         """A note's data changed: bump the mentions revision so caches that
         depend on the whole notebook's content are invalidated."""
         self._mentions_revision += 1
+        self.note_content_changed.emit(note)
 
 
 class BoardView(QGraphicsView):
-    """The view: zoom with the wheel, pan with the middle button, Delete key, fit-all."""
+    """The view: zoom with the wheel, pan with the middle button, Delete key, fit-all.
+
+    Panning
+    -------
+    Middle-button drag.  Movement is applied via the scroll bars, which
+    are in screen pixels — so the content tracks the cursor 1:1 at any
+    zoom level.  The scene rect is huge (set by ``MainWindow``), so this
+    never clamps at the content edges.
+
+    We do **not** use ``grabMouse()``: on Windows / some X11 setups it
+    can survive a window maximize transition, leaving the OS showing the
+    "grab" cursor and blocking further pan movement.  Instead, an
+    application-level event filter is installed for the duration of the
+    pan — it catches the middle-button release wherever it lands (over
+    a note, over a child widget, outside the window) and ends the pan
+    cleanly.  ``MainWindow`` also calls ``_end_pan_if_active()`` on its
+    own ``changeEvent`` / ``resizeEvent``, so a maximize or restore can
+    never leave a stale pan behind.
+    """
 
     MIN_ZOOM = 0.08
     MAX_ZOOM = 4.0
@@ -883,7 +968,9 @@ class BoardView(QGraphicsView):
         """Configure rendering, anchors and the rubber-band selection."""
         super().__init__(scene)
         self._panning = False
+        self._pan_cursor_active = False
         self._last_pos = None
+        self._pan_filter_installed = False
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setRenderHints(
             QPainter.RenderHint.Antialiasing
@@ -898,8 +985,12 @@ class BoardView(QGraphicsView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
+        # Watchdog: force-end a stuck pan after 5 s of no movement.  Each
+        # mouseMove refreshes the timer; a real drag never fires it, but a
+        # swallowed release does.
         self._pan_watchdog = QTimer(self)
         self._pan_watchdog.setInterval(5000)
+        self._pan_watchdog.setSingleShot(True)
         self._pan_watchdog.timeout.connect(self._watchdog_reset)
 
     def contextMenuEvent(self, event):
@@ -910,8 +1001,8 @@ class BoardView(QGraphicsView):
         """Qt event handler: mouse wheel.
 
         Zooming *in* is allowed from any starting point — including a
-        fit-all that went below MIN_ZOOM.  Only zooming *out* past MIN_ZOOM
-        and zooming *in* past MAX_ZOOM are blocked.
+        fit-all that went below MIN_ZOOM.  Only zooming *out* past
+        MIN_ZOOM and zooming *in* past MAX_ZOOM are blocked.
         """
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
         new_zoom = self.transform().m11() * factor
@@ -926,20 +1017,43 @@ class BoardView(QGraphicsView):
         self.scale(factor, factor)
         event.accept()
 
+    # -------------------------------------------------- pan: start / move
+
     def mousePressEvent(self, event):
-        """Qt event handler: a mouse button was pressed."""
+        """Qt event handler: a mouse button was pressed.
+
+        Middle button → free 2D pan.  No ``grabMouse()`` — see the class
+        docstring for why.  An app-level event filter catches the release
+        wherever it lands, so the cursor never sticks even if the release
+        goes to a note / pin / child widget.
+        """
         if event.button() == Qt.MouseButton.MiddleButton:
-            self._pan_watchdog.start()
             self._panning = True
             self._last_pos = event.position().toPoint()
-            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            self._begin_pan_cursor()
+            self._install_pan_filter()
+            self._pan_watchdog.start()
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        """Qt event handler: the mouse moved."""
+        """Qt event handler: the mouse moved.
+
+        Panning uses the scroll bars, not the transform.  Scroll-bar
+        values are in screen pixels, so the content tracks the cursor
+        1:1 at every zoom.  The scene rect is huge (see
+        ``MainWindow.create_canvas``), so this never clamps.
+        """
+
+        if self._panning and not (event.buttons() & Qt.MouseButton.MiddleButton):
+            self._end_pan()
+
         if self._panning:
+            # Restart the inactivity watchdog: any real movement means
+            # the user is still dragging.
+            self._pan_watchdog.start()
+
             pos = event.position().toPoint()
             delta = pos - self._last_pos
             self._last_pos = pos
@@ -953,23 +1067,103 @@ class BoardView(QGraphicsView):
 
     def mouseReleaseEvent(self, event):
         """Qt event handler: a mouse button was released."""
-        # Any release (not just the middle button) ends a stuck pan.  Qt
-        # may deliver the release to a child item when the cursor is over
-        # one, so we also handle the case in leaveEvent / focusOutEvent.
-        if self._panning:
-            self._panning = False
-            self.unsetCursor()
-        if event.button() == Qt.MouseButton.MiddleButton:
+        if self._panning and event.button() == Qt.MouseButton.MiddleButton:
+            self._end_pan()
             event.accept()
             return
+        if self._panning:
+            self._end_pan()
         super().mouseReleaseEvent(event)
 
+    # -------------------------------------- pan: end + safety nets
+
+    def _begin_pan_cursor(self):
+        """Show the closed hand via an application override cursor.
+
+        An override cursor is independent of the viewport/item cursor logic
+        in QGraphicsView, so item hover cursors can never capture it as
+        their "original" cursor and bring it back later."""
+        if not self._pan_cursor_active:
+            QGuiApplication.setOverrideCursor(Qt.CursorShape.ClosedHandCursor)
+            self._pan_cursor_active = True
+
+    def _end_pan_cursor(self):
+        """Remove the override cursor (balanced, safe to call repeatedly)."""
+        if self._pan_cursor_active:
+            self._pan_cursor_active = False
+            QGuiApplication.restoreOverrideCursor()
+
+    def _end_pan(self):
+        """Single choke point that ends a pan and clears the cursor,
+        event filter and watchdog."""
+        if not self._panning:
+            return
+        self._panning = False
+        self._end_pan_cursor()
+        self._remove_pan_filter()
+        self._pan_watchdog.stop()
+        self._last_pos = None
+
+    def _end_pan_if_active(self):
+        """Public alias for ``_end_pan()`` — used by ``MainWindow`` from
+        its ``changeEvent`` / ``resizeEvent`` handlers so a maximize or
+        restore can never leave a stale pan or stuck cursor behind."""
+        self._end_pan()
+
+    def _install_pan_filter(self):
+        """Install the application-wide release catcher if not already."""
+        if self._pan_filter_installed:
+            return
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+            self._pan_filter_installed = True
+
+    def _remove_pan_filter(self):
+        """Remove the application-wide release catcher."""
+        if not self._pan_filter_installed:
+            return
+        app = QApplication.instance()
+        if app is not None:
+            try:
+                app.removeEventFilter(self)
+            except RuntimeError:
+                pass
+        self._pan_filter_installed = False
+
+    def eventFilter(self, obj, event):
+        """Application-wide filter active only while panning: catches the
+        middle-button release wherever it happens, so the cursor never
+        sticks even if the release goes to a child widget or to the
+        window itself."""
+        if self._panning and event.type() == QEvent.Type.MouseButtonRelease:
+            try:
+                if event.button() == Qt.MouseButton.MiddleButton:
+                    self._end_pan()
+            except AttributeError:
+                pass
+        return super().eventFilter(obj, event)
+
     def focusOutEvent(self, event):
-        """Qt event handler: focus left the view."""
-        if self._panning:
-            self._panning = False
-            self.unsetCursor()
+        """Qt event handler: focus left the view — end any active pan."""
+        self._end_pan()
         super().focusOutEvent(event)
+
+    def leaveEvent(self, event):
+        """Qt event handler: the pointer left the view — end any active pan."""
+        self._end_pan()
+        super().leaveEvent(event)
+
+    def _watchdog_reset(self):
+        """Force-end a stuck pan after 5 s of no movement.  The watchdog
+        is restarted by every pan movement, so a real drag never fires it.
+        A release swallowed by a system dialog / another window does."""
+        if not self._panning:
+            self._pan_watchdog.stop()
+            return
+        self._end_pan()
+
+    # ------------------------------------------------------ keys and fit
 
     def keyPressEvent(self, event):
         """Qt event handler: a key was pressed."""
@@ -982,8 +1176,7 @@ class BoardView(QGraphicsView):
     def fit_all(self):
         """Zoom so that every note is visible (clamped to MIN_ZOOM)."""
 
-        self._panning = False
-        self.unsetCursor()
+        self._end_pan()
 
         rect = self.scene().content_rect()
         if rect is None or rect.isNull():
@@ -1006,9 +1199,10 @@ class BoardView(QGraphicsView):
 
     def reset_zoom(self):
         """Back to 100 % zoom."""
-        self._panning = False
-        self.unsetCursor()
+        self._end_pan()
         self.resetTransform()
+
+    # ------------------------------------------------------ paint hooks
 
     def paintEvent(self, event):
         """Qt event handler: a paint event.
@@ -1046,29 +1240,7 @@ class BoardView(QGraphicsView):
                     s._visible_pin_count = pin_count
         super().paintEvent(event)
 
-    def leaveEvent(self, event):
-        """Qt event handler: the pointer left the view."""
-        if self._panning:
-            self._panning = False
-            self.unsetCursor()
-        self._last_pos = None
-        super().leaveEvent(event)
-
-    def focusOutEvent(self, event):
-        """Qt event handler: focus left the view."""
-        if self._panning:
-            self._panning = False
-            self.unsetCursor()
-        self._last_pos = None
-        super().focusOutEvent(event)
-
-    def _watchdog_reset(self):
-        if self._panning:
-            # Do not reset while the middle button is still physically held —
-            # the user may just be pausing without moving.
-            from PySide6.QtWidgets import QApplication
-            if QApplication.mouseButtons() & Qt.MouseButton.MiddleButton:
-                return
-            self._panning = False
-            self.unsetCursor()
-            self._last_pos = None
+    def hideEvent(self, event):
+        """Qt event handler: never leave the pan cursor behind when hidden."""
+        self._end_pan()
+        super().hideEvent(event)

@@ -384,6 +384,42 @@ class ConnectionItem(QGraphicsPathItem):
         if self in self.end_pin.connections:
             self.end_pin.connections.remove(self)
 
+    def lay_out_component(board_scene, root_note):
+        """Return ``dict[id(note)] = (col, row)`` for the whole connected
+        component of ``root_note``.
+
+        Columns correspond to BFS depth.  Within a column, notes are ordered
+        by the order in which BFS first reached them.  The result is
+        deterministic for a given board.
+
+        Shared by ``FlowScene.lay_out_component`` (used by tests) and
+        ``MiniMap._rebuild`` — this is what keeps the two from drifting.
+        """
+        if root_note is None or root_note.scene() is not board_scene:
+            return {}
+
+        seen = {id(root_note): 0}
+        frontier = [root_note]
+        by_col = {0: [root_note]}
+
+        while frontier:
+            next_frontier = []
+            for current in frontier:
+                depth = seen[id(current)]
+                for other, _label in current.links():
+                    if id(other) in seen:
+                        continue
+                    seen[id(other)] = depth + 1
+                    by_col.setdefault(depth + 1, []).append(other)
+                    next_frontier.append(other)
+            frontier = next_frontier
+
+        positions = {}
+        for depth, notes in by_col.items():
+            for row, note in enumerate(notes):
+                positions[id(note)] = (depth, row)
+        return positions
+
 
 def thread_path(start: QPointF, end: QPointF) -> QPainterPath:
     """Durchhängender Faden (Bezier)."""
