@@ -115,7 +115,6 @@ class NoteItem(QGraphicsRectItem):
     def model_changed(self):
 
         """The note's data changed: drop caches and repaint."""
-        print("model_changed:", self.model.title)
         self.model.touch()
         self._tooltip_html = None
         self._haystack = None

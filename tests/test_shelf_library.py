@@ -107,6 +107,7 @@ pdf = os.path.join(home, "m.pdf"); write_pdf(to_html(secs, "T", "A", True), pdf)
 dlg = ManuscriptDialog(list(s.note_lookup.values()), w.note_types); assert "1 Notizen" in dlg.summary.text()
 n = [x for x in s.note_lookup.values() if x.model.note_type == "chapter"][0]
 c2 = s.create_note("character", QPointF(300, 0)); c2.model.title = "Marta"; n.model.content = "Heute traf Marta den Kapitän."
+c2.model_changed(); n.model_changed()
 w.inspector.set_note(c2); texts = [w.inspector.links_list.item(i).text() for i in range(w.inspector.links_list.count())]
 assert any("erwähnt in Kap 1" in t for t in texts), texts
 from models import parse_date_key

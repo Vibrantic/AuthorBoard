@@ -53,7 +53,7 @@ HIDDEN = [
     "models", "storage", "undo", "settings", "settings_dialog",
     "help_dialog", "about_dialog", "i18n", "theme", "widgets",
     "palette", "stats", "manuscript", "export", "version", "resource",
-    "flow_view",
+    "flow_view", "group_item",
 ]
 
 

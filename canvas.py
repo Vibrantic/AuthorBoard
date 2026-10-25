@@ -69,6 +69,7 @@ from PySide6.QtWidgets import (
     QGraphicsScene,
     QGraphicsView,
     QMenu,
+    QMessageBox,
 )
 
 from models import (
@@ -82,12 +83,14 @@ from models import (
     STATUS_INFO,
     note_matches,
     note_sort_key,
+    GroupData,
 )
 from note_item import NoteItem
 from pin_item import PinItem
 from connection_item import ConnectionItem, thread_path
-from theme import ACCENT, PRESET_COLORS, color_icon
+from theme import ACCENT, PRESET_COLORS, GROUP_COLORS, color_icon
 from i18n import tr, N_
+from group_item import GroupItem, HEADER_H
 
 
 def _make_grid_pixmap() -> QPixmap:
@@ -124,6 +127,8 @@ class BoardScene(QGraphicsScene):
         self.note_lookup = {}
         self.pin_lookup = {}
         self.connection_items = []
+        self.group_lookup = {}
+        self._group_z_counter = 0
 
         self._top_z = 10
         self._current_note = None
@@ -344,7 +349,7 @@ class BoardScene(QGraphicsScene):
         """Notizen spaltenweise nach Notizart ordnen (Kapitel nach Nummer)."""
         if not self.note_lookup:
             return
-        rect = self.content_rect()
+        rect = self.content_rect(include_groups=False)
         x0, y0 = rect.left(), rect.top()
         groups = {}
         for note in self.note_lookup.values():
@@ -392,6 +397,173 @@ class BoardScene(QGraphicsScene):
         self.removeItem(note)
         self.notes_changed.emit()
         self.structure_changed.emit()
+
+    # ------------------------------------------------------------ Gruppen
+
+    GROUP_Z_BASE = -10000
+
+    def add_group_item(self, data):
+        """Insert a group frame (new or loaded).  Later groups lie on top."""
+        group = GroupItem(data)
+        self.addItem(group)
+        self.group_lookup[data.id] = group
+        self._group_z_counter += 1
+        group.setZValue(self.GROUP_Z_BASE + self._group_z_counter)
+        if self._group_z_counter > 9000:
+            self._renormalize_group_z()
+        return group
+
+    def _renormalize_group_z(self):
+        """Compact the z-values, keeping the stacking order."""
+        ordered = sorted(self.group_lookup.values(), key=lambda g: g.zValue())
+        for i, g in enumerate(ordered, 1):
+            g.setZValue(self.GROUP_Z_BASE + i)
+        self._group_z_counter = len(ordered)
+
+    def clear_groups(self):
+        """Remove all frames silently (used by undo / redo)."""
+        for g in list(self.group_lookup.values()):
+            if g.scene() is self:
+                self.removeItem(g)
+        self.group_lookup.clear()
+        self._group_z_counter = 0
+
+    def remove_group(self, group):
+        """Remove a frame; the notes stay."""
+        if group.scene() is self:
+            self.removeItem(group)
+        self.group_lookup.pop(group.model.id, None)
+        self.notes_changed.emit()
+
+    def _next_group_color(self):
+        return GROUP_COLORS[len(self.group_lookup) % len(GROUP_COLORS)]
+
+    def create_group_from_selection(self):
+        """Frame the selected notes with a new group (None if nothing selected)."""
+        notes = self._selected_notes()
+        if not notes:
+            return None
+        rect = None
+        for n in notes:
+            r = n.mapRectToScene(n.rect())
+            rect = r if rect is None else rect.united(r)
+        pad = 30
+        data = GroupData(
+            title=tr("Gruppe"), color=self._next_group_color(),
+            x=rect.left() - pad, y=rect.top() - pad - HEADER_H,
+            width=rect.width() + 2 * pad,
+            height=rect.height() + 2 * pad + HEADER_H)
+        group = self.add_group_item(data)
+        self.notes_changed.emit()
+        self.interaction_finished.emit()
+        return group
+
+    def create_empty_group(self, pos):
+        """Create an empty frame whose top-left corner is ``pos``."""
+        data = GroupData(title=tr("Gruppe"), color=self._next_group_color(),
+                         x=pos.x(), y=pos.y())
+        group = self.add_group_item(data)
+        self.notes_changed.emit()
+        return group
+
+    def rename_group(self, group):
+        """Ask for a new title."""
+        views = self.views()
+        text, ok = QInputDialog.getText(
+            views[0] if views else None, tr("Gruppe umbenennen"),
+            tr("Titel der Gruppe:"), text=group.model.title)
+        if ok:
+            group.set_title(text.strip())
+            self.notes_changed.emit()
+
+    def set_group_locked(self, group, locked):
+        """Lock / unlock a frame."""
+        group.set_locked(locked)
+        self.notes_changed.emit()
+
+    def raise_group(self, group):
+        """Put a frame above all other frames (it then wins overlaps)."""
+        self._group_z_counter += 1
+        group.setZValue(self.GROUP_Z_BASE + self._group_z_counter)
+        if self._group_z_counter > 9000:
+            self._renormalize_group_z()
+        self.notes_changed.emit()
+
+    # --- geometric membership: the topmost frame containing the centre wins
+
+    def _groups_by_z(self):
+        """All frames, topmost first."""
+        return sorted(self.group_lookup.values(),
+                      key=lambda g: g.zValue(), reverse=True)
+
+    def note_group(self, note, ordered=None):
+        """The frame a note belongs to (None = no frame)."""
+        if ordered is None:
+            ordered = self._groups_by_z()
+        c = note.mapToScene(note.rect().center())
+        for g in ordered:
+            if g.scene_rect().contains(c):
+                return g
+        return None
+
+    def group_members(self, group):
+        """``(frames, notes)`` that move with ``group``, locked ones included.
+
+        Notes: those whose winning frame is ``group`` or one of its nested
+        frames.  A frame is nested when it lies completely inside a frame
+        that is the topmost one containing it."""
+        ordered = self._groups_by_z()
+        moved = {group}
+        changed = True
+        while changed:
+            changed = False
+            for h in ordered:
+                if h in moved:
+                    continue
+                hr = h.scene_rect()
+                parent = next((g for g in ordered
+                               if g is not h and g.scene_rect().contains(hr)), None)
+                if parent is not None and parent in moved:
+                    moved.add(h)
+                    changed = True
+        notes = [n for n in self.note_lookup.values()
+                 if self.note_group(n, ordered) in moved]
+        return moved, notes
+
+    def group_block(self, group):
+        """``[(item, start_pos)]`` of everything a header drag moves (unlocked only)."""
+        frames, notes = self.group_members(group)
+        return [(it, QPointF(it.pos())) for it in list(frames) + notes
+                if not it.model.locked]
+
+    def move_block(self, block, delta):
+        """Move all items of ``block`` by ``delta`` (grid snapping applies to the delta)."""
+        dx, dy = delta.x(), delta.y()
+        snap = self.snap_to_grid
+        if snap:
+            dx, dy = round(dx / 20) * 20, round(dy / 20) * 20
+        self.snap_to_grid = False          # keep relative offsets exact
+        try:
+            for item, start in block:
+                item.setPos(start.x() + dx, start.y() + dy)
+        finally:
+            self.snap_to_grid = snap
+
+    def delete_group_with_notes(self, group):
+        """Delete the frame and every note it contains (after confirmation)."""
+        frames, notes = self.group_members(group)
+        views = self.views()
+        answer = QMessageBox.question(
+            views[0] if views else None, tr("Gruppe löschen"),
+            tr("„{title}“ und {n} Notizen wirklich löschen?",
+               title=group.model.title or tr("Gruppe"), n=len(notes)),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        for n in notes:
+            self.remove_note(n)
+        for g in list(frames):
+            self.remove_group(g)
 
     # ------------------------------------------------------------- Fäden
 
@@ -443,6 +615,8 @@ class BoardScene(QGraphicsScene):
             elif isinstance(item, ConnectionItem):
                 self.remove_connection(item)
                 self.notes_changed.emit()
+            elif isinstance(item, GroupItem):
+                self.remove_group(item)
 
     def rebuild_lookup_tables(self):
         """Recompute the id -> item dictionaries from the scene contents."""
@@ -465,6 +639,8 @@ class BoardScene(QGraphicsScene):
         self.note_lookup.clear()
         self.pin_lookup.clear()
         self.connection_items.clear()
+        self.group_lookup.clear()
+        self._group_z_counter = 0
         self._note_rects.clear()
         self._visible_thread_count = 0
         self._visible_pin_count = 0
@@ -474,12 +650,16 @@ class BoardScene(QGraphicsScene):
         self.notes_changed.emit()
         self._mentions_revision += 1
 
-    def content_rect(self):
-        """Bounding rectangle of all notes (None when empty)."""
+    def content_rect(self, include_groups=True):
+        """Bounding rectangle of all notes (and group frames); None when empty."""
         rect = None
         for note in self.note_lookup.values():
             r = note.sceneBoundingRect()
             rect = r if rect is None else rect.united(r)
+        if include_groups:
+            for g in self.group_lookup.values():
+                r = g.sceneBoundingRect()
+                rect = r if rect is None else rect.united(r)
         return rect
 
     # ------------------------------------------------------ Filter / Suche
@@ -695,6 +875,26 @@ class BoardScene(QGraphicsScene):
                 c.setOpacity(op)
                 c.update()
 
+        if self.group_lookup:
+            ordered = self._groups_by_z()
+            members = {}
+            if active or keep is not None:
+                for note in self.note_lookup.values():
+                    g = self.note_group(note, ordered)
+                    if g is not None:
+                        members.setdefault(g, []).append(note)
+            for g in ordered:
+                op = 1.0
+                ms = members.get(g)
+                if ms:
+                    if active and not any(self.note_matches(n) for n in ms):
+                        op = 0.18
+                    elif keep is not None and not any(n in keep for n in ms):
+                        op = 0.15
+                if g.opacity() != op:
+                    g.setOpacity(op)
+                    g.update()
+
     def set_focus_mode(self, on):
         """Switch focus mode on or off."""
         self.focus_mode = on
@@ -872,6 +1072,8 @@ class BoardScene(QGraphicsScene):
                 lambda _=False: self.flow_requested.emit(item))
             menu.addAction(tr("Duplizieren")).triggered.connect(
                 lambda _=False: self.duplicate_note(item))
+            menu.addAction(tr("Gruppe aus Auswahl")).triggered.connect(
+                lambda _=False: self.create_group_from_selection())
 
             # Only useful if the note actually has neighbours.
             has_connections = bool(item.links())
@@ -923,12 +1125,37 @@ class BoardScene(QGraphicsScene):
             menu.addAction(tr("Notiz löschen")).triggered.connect(
                 lambda _=False: self.remove_note(item))
 
+        elif isinstance(item, GroupItem):
+            menu.addAction(tr("Gruppe umbenennen …")).triggered.connect(
+                lambda _=False: self.rename_group(item))
+
+            def set_group_color(c):
+                item.set_color(c)
+                self.notes_changed.emit()
+
+            self._add_color_menu(menu, tr("Gruppenfarbe"), item.model.color, set_group_color)
+            if item.model.locked:
+                menu.addAction(tr("Gruppe entsperren")).triggered.connect(
+                    lambda _=False: self.set_group_locked(item, False))
+            else:
+                menu.addAction(tr("Gruppe sperren")).triggered.connect(
+                    lambda _=False: self.set_group_locked(item, True))
+            menu.addAction(tr("Gruppe nach vorne")).triggered.connect(
+                lambda _=False: self.raise_group(item))
+            menu.addSeparator()
+            menu.addAction(tr("Gruppe auflösen")).triggered.connect(
+                lambda _=False: self.remove_group(item))
+            menu.addAction(tr("Gruppe samt Notizen löschen")).triggered.connect(
+                lambda _=False: self.delete_group_with_notes(item))
+
         else:
             sub = menu.addMenu(tr("Neue Notiz hier"))
             for t in self.note_types.values():
                 action = sub.addAction(color_icon(t.color), t.label)
                 action.triggered.connect(
                     lambda _=False, k=t.key: self.create_note(k, scene_pos))
+            menu.addAction(tr("Neue Gruppe hier")).triggered.connect(
+                lambda _=False: self.create_empty_group(scene_pos))
 
         menu.exec(screen_pos)
 

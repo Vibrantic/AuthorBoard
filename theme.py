@@ -33,6 +33,10 @@ CUSTOM_TYPE_COLORS = [
     "#d1c4e9", "#b2dfdb", "#f0f4c3", "#ffccbc",
 ]
 
+GROUP_COLORS = [
+    "#4da6ff", "#4cc38a", "#ff9f43", "#b388ff",
+    "#ffd54f", "#e8505b", "#26a69a", "#f48fb1",
+]
 
 def color_icon(color: str, size: int = 14) -> QIcon:
     """A small rounded colour swatch as QIcon."""

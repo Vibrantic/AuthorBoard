@@ -30,6 +30,7 @@ from models import (
     DEFAULT_NOTE_COLOR,
     DEFAULT_PIN_COLOR,
     DEFAULT_THREAD_COLOR,
+    GroupData,
 )
 
 FORMAT_VERSION = 4
@@ -47,6 +48,7 @@ class Storage:
         ``with_blobs`` is True (undo snapshots leave them out to stay small)."""
 
         data = {
+            "groups": [Storage.group_to_dict(g) for g in project.groups],
             "version": FORMAT_VERSION,
             "custom_types": [
                 {
@@ -204,6 +206,8 @@ class Storage:
                 label=cd.get("label", ""),
             ))
 
+        project.groups = [Storage.group_from_dict(g) for g in data.get("groups", [])]
+
         return project
 
     # ------------------------------------------------------- Dateien
@@ -298,5 +302,22 @@ class Storage:
                 for t in project.custom_types
             ],
             "known_tags": list(project.known_tags),
+            "groups": [Storage.group_to_dict(g) for g in project.groups],
         }, sort_keys=True, ensure_ascii=False)
         return notes_json, connections_json, meta_json
+
+    @staticmethod
+    def group_to_dict(g) -> dict:
+        """Serialise a GroupData."""
+        return {"id": g.id, "title": g.title, "x": g.x, "y": g.y,
+                "width": g.width, "height": g.height,
+                "color": g.color, "locked": g.locked}
+
+    @staticmethod
+    def group_from_dict(d: dict):
+        """Build a GroupData (tolerates missing fields)."""
+        return GroupData(
+            id=d["id"], title=d.get("title", ""),
+            x=float(d.get("x", 0.0)), y=float(d.get("y", 0.0)),
+            width=float(d.get("width", 400.0)), height=float(d.get("height", 300.0)),
+            color=d.get("color", "#4da6ff"), locked=bool(d.get("locked", False)))

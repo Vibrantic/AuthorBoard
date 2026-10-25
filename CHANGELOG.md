@@ -1,5 +1,79 @@
 # Changelog
 
+## 1.2.1
+
+Group frames, a fix for undo, and a fix for the stuck mouse cursor.
+Existing notebooks open unchanged.
+
+**New**
+
+- **Group frames.** Select notes and press `Ctrl+G` (or right-click a
+  note → *Gruppe aus Auswahl*) to frame them with a titled, coloured,
+  resizable group, similar to the comment box in Unreal Blueprints. A
+  group can also be created empty from the board's right-click menu
+  (*Neue Gruppe hier*).
+  - Dragging the header moves the frame together with all notes inside
+    it. Pins and threads follow. Locked notes stay where they are.
+  - Membership is geometric: a note belongs to the topmost frame that
+    contains its centre. Notes dropped into a frame join it, notes
+    dragged out leave it. Where frames overlap, the topmost frame wins.
+  - Frames can be nested: a frame that lies completely inside another
+    one moves with it.
+  - Double-click the header to rename. Right-click offers rename,
+    colour, lock, *Gruppe nach vorne*, *Gruppe auflösen* (frame
+    removed, notes stay) and *Gruppe samt Notizen löschen*. `Delete`
+    on a selected frame removes only the frame.
+  - Only the header, the border and the resize corner react to the
+    mouse. The inside of a frame is click-through, so rubber-band
+    selection and double-click-to-create-a-note still work there.
+  - Frames dim together with their notes when a search filter or
+    focus mode is active, are included in *Alles anzeigen* and in the
+    PNG export, and are covered by undo / redo, autosave and backups.
+  - Stored as an optional `"groups"` list in the notebook file. The
+    file format version is unchanged; older AuthorBoard versions open
+    such files but ignore the frames.
+
+- **Groups in the in-app manual.** Two new help topics — *Gruppen*
+  and *FlowView* — are included in the English and German manual
+  (`help/en/19-groups.md`, `help/en/20-flowview.md` and the `de`
+  equivalents), linked from *Getting started* and searchable through
+  *F1 → Documentation*.
+
+**Fixed**
+
+- **Undo / redo did not restore notes.** `apply_state` compared the
+  target snapshot with itself, so no note was ever replaced; only
+  threads, selection and (now) group frames came back. It now
+  compares against the state that was being displayed.
+
+- Removed a leftover debug `print` from `NoteItem.model_changed`
+  that wrote a line to the console on every edit.
+
+**Build**
+
+- `group_item` added to the hidden imports of all three build
+  scripts, and `flow_view` added to the Linux and macOS scripts (the
+  Windows script had it).
+- `tools/make_screenshots.py` now sets `QT_QPA_FONTDIR` on Windows
+  (offscreen mode) so screenshots render with the system fonts, and
+  copies a single known-good TTF into a temp directory to avoid the
+  `QFontEngineFT: Failed to create FreeType font engine` warning
+  some Windows font files trigger. The offscreen plugin's
+  `propagateSizeHints` chatter is filtered out of stderr.
+
+**Internal**
+
+- New test `tests/test_groups.py` (creation, membership, nesting,
+  moving, undo, save / load).
+- `tests/test_i18n.py` no longer starts a real second process when
+  switching the language (the old test re-launched itself
+  recursively) and uses its own settings key, so it no longer
+  changes the real language setting.
+- `tests/test_flow_view.py` repaired and extended with a minimap
+  path check.
+- `tests/test_shelf_library.py`: mention lookup now announces its
+  edits via `model_changed()`, as the app does.
+
 ## 1.2.0
 
 **New**

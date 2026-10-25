@@ -1,23 +1,27 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""English interface, translated type/attribute names and live language switching.
+"""English interface, translated type/attribute names and the language switch.
 
 Run directly (``python tests/test_i18n.py``) or all together with ``python tests/run_all.py``.
-The tests run Qt headless (QT_QPA_PLATFORM=offscreen) against a temporary
-AUTHORBOARD_HOME, so they never touch your real library.
 """
-import os, sys, tempfile
+import atexit, os, sys, tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 TMP = tempfile.mkdtemp(prefix="ab-test-")
-home = os.path.join(TMP, "home"); os.makedirs(home); os.environ["AUTHORBOARD_HOME"] = home; os.environ["QT_QPA_PLATFORM"] = "offscreen"
+home = os.path.join(TMP, "home"); os.makedirs(home)
+os.environ["AUTHORBOARD_HOME"] = home; os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import QPointF, QSettings
-QSettings.setPath(QSettings.Format.NativeFormat, QSettings.Scope.UserScope, os.path.join(TMP, 'qsettings'))
-QSettings("AuthorBoard", "AuthorBoard").remove("language")
+from PySide6.QtCore import QPointF, QSettings, QTimer
 import i18n, main as M
 from main import MainWindow
 from theme import apply_dark_palette
 from models import attribute_value
+
+# QSettings lives in the registry on Windows: use an own key so the test never
+# touches the real "AuthorBoard" settings.
+M.SETTINGS_ORG = M.SETTINGS_APP = "AuthorBoardTest"
+TEST_Q = lambda: QSettings("AuthorBoardTest", "AuthorBoardTest")
+TEST_Q().clear()
+atexit.register(lambda: TEST_Q().clear())
 
 app = QApplication([]); app.setStyle("Fusion"); apply_dark_palette(app)
 i18n.set_language("en")
@@ -39,21 +43,31 @@ w.timeline_dock.show(); w.refresh_timeline(); assert len(w.timeline.entries) == 
 print("tooltip:", n.tooltip_text().replace("<br>", " | ")[:100])
 print("status:", w.statusBar().currentMessage()[:50], "|", w.stats_label.text())
 w.checkpoint()
-# Live-Wechsel nach Deutsch (mit ungespeicherten Änderungen -> Dialog)
-from PySide6.QtCore import QTimer
+
+# --- Language switch: the app restarts itself in a NEW PROCESS.  Never launch
+# it for real in a test (the child would run this script again), so replace
+# QProcess in main.py by a recorder.
+launched = []
+class _FakeProcess:
+    @staticmethod
+    def startDetached(*args, **kwargs):
+        launched.append(args)
+        return True
+M.QProcess = _FakeProcess
+
 def click(text):
     def f():
         box = QApplication.activeModalWidget()
         for bt in box.buttons():
             if bt.text() == text: bt.click()
     QTimer.singleShot(150, f)
+
 assert w.dirty
 click("Save"); w.switch_language("de"); app.processEvents()
-assert i18n.current_language() == "de"
-new = M._windows[-1]; assert new is not w and not new.on_shelf() and new.current_book.id == b.id
-assert len(new.scene.note_lookup) == 2
-assert [a.text() for a in new.menuBar().actions()] == ["Datei", "Bearbeiten", "Ansicht", "Hilfe"]
-assert QSettings("AuthorBoard", "AuthorBoard").value("language") == "de"
-print("after switch:", new.windowTitle(), "| types:", sorted({n.type_info().label for n in new.scene.note_lookup.values()}))
-QSettings("AuthorBoard", "AuthorBoard").remove("language")
+assert len(launched) == 1, launched
+assert w._closing_for_switch
+q = TEST_Q()
+assert q.value("language") == "de"
+assert q.value("reopen_book") == b.id
+print("switch ok; restart requested:", launched[0][0])
 print("ALL OK")

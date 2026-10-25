@@ -22,5 +22,7 @@
 - [Working on the board](topic:04-board)
 - [The full-size editor](topic:07-editor)
 - [Keyboard shortcuts](topic:16-shortcuts)
+- [Groups](topic:19-groups)
+- [FlowView](topic:20-flowview)
 
 Use the search box in the top left of this window to find any word in the documentation.

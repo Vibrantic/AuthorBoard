@@ -528,6 +528,11 @@ class MainWindow(QMainWindow):
         self.act_duplicate = self._action(
             tr("Notiz duplizieren"), "Ctrl+D", self.duplicate_selected
         )
+        self.act_group = self._action(tr("Gruppe aus Auswahl"), "Ctrl+G", self.group_selected)
+
+        self._tip(self.act_group, tr("Rahmen um die ausgewählten Notizen anlegen; er verschiebt sie gemeinsam (Strg+G)"))
+        edit_menu.addAction(self.act_group)          # after edit_menu.addAction(self.act_duplicate)
+
         self.act_editor = self._action(
             tr("Notiz im großen Editor öffnen"), "F2", self.open_editor
         )
@@ -757,17 +762,19 @@ class MainWindow(QMainWindow):
     def undo(self):
         """Step back in the history."""
         self.checkpoint()
+        prev = self.undo_stack.current
         state = self.undo_stack.undo()
         if state is not None:
-            self.apply_state(state)
+            self.apply_state(state, prev)
             self.statusBar().showMessage(tr("Rückgängig"), 2000)
 
     def redo(self):
         """Step forward in the history."""
         self.checkpoint()
+        prev = self.undo_stack.current
         state = self.undo_stack.redo()
         if state is not None:
-            self.apply_state(state)
+            self.apply_state(state, prev)
             self.statusBar().showMessage(tr("Wiederholt"), 2000)
 
     def reset_history(self):
@@ -779,13 +786,14 @@ class MainWindow(QMainWindow):
         self.update_undo_actions()
         self.update_dirty()
 
-    def apply_state(self, state):
+    def apply_state(self, state, old=None):
         """Rebuild the board from a snapshot, changing only the notes that differ."""
         from models import ConnectionData, NoteTypeData
 
         selected = [i.model.id for i in self.scene.selectedItems()
                     if isinstance(i, NoteItem)]
-        old = self.undo_stack.current
+        if old is None:
+            old = self.undo_stack.current
         changed = state.changed_note_ids(old) if old is not None else set(state.notes)
 
         self._restoring = True
@@ -820,6 +828,11 @@ class MainWindow(QMainWindow):
                         end_pin_id=cd["end_pin_id"],
                         color=cd.get("color", ""), label=cd.get("label", ""),
                     ), start, end)
+
+            self.scene.clear_groups()
+            for gd in json.loads(state.meta).get("groups", []):
+                self.scene.add_group_item(Storage.group_from_dict(gd))
+
             self.scene.clearSelection()
             for note_id in selected:
                 note = self.scene.note_lookup.get(note_id)
@@ -1138,6 +1151,11 @@ class MainWindow(QMainWindow):
         self.scene.clearSelection()
         for copy in old_to_new.values():
             copy.setSelected(True)
+
+    def group_selected(self):
+        """Ctrl+G: frame the selected notes with a group."""
+        if self.scene.create_group_from_selection() is None:
+            self.statusBar().showMessage(tr("Keine Notiz ausgewählt."), 3000)
 
     def open_editor(self, note=None, focus_comment=None):
         """Open the full-size editor for ``note`` (default: the inspected note).
@@ -2053,6 +2071,11 @@ class MainWindow(QMainWindow):
             if d.start_pin_id in pin_ids and d.end_pin_id in pin_ids:
                 project.connections.append(d)
 
+        for g in sorted(self.scene.group_lookup.values(), key=lambda g: g.zValue()):
+            pos = g.pos()
+            g.model.x, g.model.y = pos.x(), pos.y()
+            project.groups.append(g.model)
+
         if for_file:
             project.known_tags = sorted(self.known_tags)
             project.blobs = self.attachments.subset(
@@ -2254,6 +2277,9 @@ class MainWindow(QMainWindow):
 
             self.scene.add_connection(cd, start, end)
 
+        for gd in project.groups:
+            self.scene.add_group_item(gd)
+
         self.refresh_views()
 
         if fit:
@@ -2302,6 +2328,14 @@ def main():
     window = MainWindow()
     _windows.append(window)
     window.show()
+
+    q = QSettings(SETTINGS_ORG, SETTINGS_APP)
+    book_id = q.value("reopen_book", "")
+    if book_id:
+        q.remove("reopen_book")
+        book = next((b for b in window.library.books if b.id == book_id), None)
+        if book is not None:
+            QTimer.singleShot(0, lambda: window.open_book(book))
 
     sys.exit(app.exec())
 

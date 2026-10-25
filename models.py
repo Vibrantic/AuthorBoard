@@ -28,6 +28,8 @@ def generate_id() -> str:
 DEFAULT_PIN_COLOR = "#4da6ff"
 DEFAULT_THREAD_COLOR = "#d4a373"
 DEFAULT_NOTE_COLOR = "#fff176"
+DEFAULT_GROUP_COLOR = "#4da6ff"
+
 
 
 @dataclass
@@ -173,12 +175,24 @@ class ConnectionData:
     color: str = DEFAULT_THREAD_COLOR
     label: str = ""   # Beziehung, z.B. "Bruder von"
 
+@dataclass
+class GroupData:
+    """A group frame on the board (geometric membership, see group_item.py)."""
+    id: str = field(default_factory=generate_id)
+    title: str = "Gruppe"
+    x: float = 0.0
+    y: float = 0.0
+    width: float = 400.0
+    height: float = 300.0
+    color: str = DEFAULT_GROUP_COLOR
+    locked: bool = False
 
 @dataclass
 class ProjectData:
     """A whole notebook in memory.  ``blobs`` (attachment bytes) are not part of undo snapshots."""
     notes: List[NoteData] = field(default_factory=list)
     connections: List[ConnectionData] = field(default_factory=list)
+    groups: List[GroupData] = field(default_factory=list)
     custom_types: List[NoteTypeData] = field(default_factory=list)
     known_tags: List[str] = field(default_factory=list)       # tag autocomplete (per book)
     blobs: Dict[str, bytes] = field(default_factory=dict)     # attachment id -> bytes

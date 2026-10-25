@@ -433,6 +433,42 @@ def build(lang):
     c("ev_geburt", "mira", T("betrifft", "concerns"), YELLOW); c("ev_orden", "orden", T("betrifft", "concerns"), BLUE)
     pin("stil", VIOLET); pin("fragen", RED); pin("idee2", GREEN)          # decorative pins without threads
 
+    # ================================================================ groups
+    # Frames are computed from the notes they surround, with the same maths as
+    # BoardScene.create_group_from_selection (padding + 34 px header).  Order
+    # matters: a later group lies on top, so nested frames come after their parent.
+    groups = []
+
+    def group(key, title, color, members, pad=30, locked=False):
+        ns = [by_key[m] for m in members]
+        x0, y0 = min(n["x"] for n in ns), min(n["y"] for n in ns)
+        x1 = max(n["x"] + n["width"] for n in ns)
+        y1 = max(n["y"] + n["height"] for n in ns)
+        groups.append({"id": uid("group", key), "title": title,
+                       "x": x0 - pad, "y": y0 - pad - 34,
+                       "width": (x1 - x0) + 2 * pad, "height": (y1 - y0) + 2 * pad + 34,
+                       "color": color, "locked": locked})
+
+    group("cast", T("Figuren", "Cast"), "#4da6ff",
+          ["mira", "kaelen", "veyr", "tomas", "isolde", "huter"], pad=50)
+    group("betrayal", T("Verrat & Macht", "Betrayal & power"), "#e8505b",       # nested in "cast"
+          ["kaelen", "veyr"])
+    group("places", T("Schauplätze", "Places"), "#4cc38a",
+          ["wald", "burg", "hafen", "archiv", "quelle"], pad=24)
+    group("factions", T("Fraktionen & Magie", "Factions & magic"), "#b388ff",
+          ["orden", "gilde", "funkenruf", "aschenschwur", "mood"])
+    group("plot", T("Handlungsstruktur", "Plot structure"), "#80deea",          # locked frame
+          ["akt1", "akt2", "akt3", "wende"], locked=True)
+    group("items", T("Gegenstände", "Items"), "#ff9f43", ["stab", "ring", "karte"])
+    group("manuscript", T("Manuskript", "Manuscript"), "#26a69a",
+          [f"kap{i}" for i in range(1, 7)] + [f"szene{nr}" for nr in ("1.1", "1.2", "2.1", "3.1", "4.1", "5.1")],
+          pad=40)
+    group("act1", T("Akt I – Der Funke", "Act I - The Spark"), "#ffd54f",       # nested in "manuscript"
+          ["kap1", "kap2", "szene1.1", "szene1.2"], pad=20)
+    group("events", T("Ereignisse", "Events"), "#f48fb1", [e[0] for e in events], pad=20)
+    group("workshop", T("Werkstatt", "Workshop"), "#9e9e9e",
+          ["idee1", "idee2", "res1", "res2", "stil", "fragen"], pad=12)
+
     tag_memory = sorted({t for n in notes for t in n["tags"]} | {T("zukunft", "future"), T("figur", "character"), "mira"})
 
     book = {
@@ -448,7 +484,7 @@ def build(lang):
     }
 
     return {"version": 4, "book": book, "custom_types": custom_types, "known_tags": tag_memory, "notes": notes,
-            "connections": connections,
+            "connections": connections, "groups": groups,
             "attachment_data": {k: base64.b64encode(v).decode("ascii") for k, v in blobs.items()}}
 
 
@@ -462,7 +498,8 @@ def main():
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         print(f"{name}: {len(data['notes'])} notes, {len(data['connections'])} threads, "
-              f"{len(data['attachment_data'])} attachments, {os.path.getsize(path) // 1024} KB")
+              f"{len(data['groups'])} groups, {len(data['attachment_data'])} attachments, "
+              f"{os.path.getsize(path) // 1024} KB")
 
 
 if __name__ == "__main__":

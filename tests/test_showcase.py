@@ -23,6 +23,7 @@ import rich_text as rt
 src = glob.glob(ROOT + f"/showcase/*{'Aschenwald' if lang=='de' else 'Ashwood'}*.json")[0]
 p = Storage.load(src)
 pins = {pin.id for n in p.notes for pin in n.pins}
+assert len(p.groups) == 10
 assert all(c.start_pin_id in pins and c.end_pin_id in pins for c in p.connections)
 for n in p.notes:
     for c in n.comments: assert rt.COMMENT_PREFIX + c.id in n.rich, (n.title, c.text)
@@ -36,6 +37,13 @@ w.shelf.import_files(); app.processEvents()
 b = w.library.books[-1]; print("book:", b.title, "|", w.library.category(b.category_id).name, "|", b.target_words, "|", len(b.attributes))
 w.open_book(b); app.processEvents(); app.processEvents()
 s = w.scene; assert len(s.note_lookup) == 51 and not w.dirty
+assert len(s.group_lookup) == 10
+assert all(s.note_group(n) is not None for n in s.note_lookup.values())
+kaelen = [n for n in s.note_lookup.values() if n.model.title.startswith("Kaelen")][0]
+mira_n = [n for n in s.note_lookup.values() if n.model.title.startswith("Mira")][0]
+assert s.note_group(kaelen) is not s.note_group(mira_n)        # nested frame wins for Kaelen
+assert s.note_group(kaelen).model.locked is False
+assert any(g.model.locked for g in s.group_lookup.values())
 assert "global_moodboard" in w.note_types and "custom_fraktion" in w.note_types
 w.timeline_dock.show(); app.processEvents(); w.refresh_timeline()
 print("timeline entries:", len(w.timeline.entries), "undated:", w.timeline.undated)

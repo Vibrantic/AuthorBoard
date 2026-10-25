@@ -8,7 +8,7 @@
 # version.  It is distributed WITHOUT ANY WARRANTY; see the file LICENSE.
 """Version and project metadata shown in the About dialog and the docs."""
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 APP_NAME = "AuthorBoard"
 LICENSE_NAME = "GNU General Public License v3.0 or later"
 LICENSE_SPDX = "GPL-3.0-or-later"

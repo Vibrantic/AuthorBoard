@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""FlowView: navigation, layout, editing, edge deletion, re-root."""
+"""FlowView: navigation, layout, minimap path, editing, edge deletion, re-root."""
 import os, sys, tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -27,25 +27,21 @@ d = s.create_note("note", QPointF(1200, 0));     d.model.title = "D"
 pa, pb, pc, pd = a.add_pin(100, 60), bb.add_pin(60, 60), c.add_pin(60, 60), d.add_pin(60, 60)
 s.create_connection(pa, pb); s.create_connection(pb, pc); s.create_connection(pc, pd)
 
-for i in range(300):
-    n = s.create_note("note", QPointF(i * 20, 0))
-    n.model.title = f"n{i}"
-    if i == 0:
-        s.create_connection(root_pin, n.add_pin(10, 10))
-    else:
-        prev = [x for x in s.note_lookup.values() if x.model.title == f"n{i-1}"][0]
-        s.create_connection(prev.pins[0], n.add_pin(10, 10))
-
-dlg.set_root(root)
-app.processEvents()
-assert dlg.minimap._silhouette is not None
-assert dlg.minimap._focus_count <= 1 + len(dlg.board_scene.direct_neighbours(root))
-
 # ---- layout ----
 dlg = FlowViewDialog(s, w.attachments, a, parent=w); dlg.show(); app.processEvents()
 titles = sorted(n.model().title for n in dlg._scene.nodes)
 print("A view:", titles)
 assert titles == ["A", "B"], titles
+
+# ---- minimap: C and D are silhouettes, selecting D highlights the whole path ----
+mm = dlg.minimap
+assert id(a) in mm._active_ids and id(bb) in mm._active_ids
+assert id(c) in mm._silhouette_ids and id(d) in mm._silhouette_ids
+mm._selected_silhouette = id(d); mm.refresh(); app.processEvents()
+assert mm.current_path_ids() == {id(a), id(bb), id(c), id(d)}, mm.current_path_ids()
+mm._selected_silhouette = None; mm.refresh(); app.processEvents()
+assert mm.current_path_ids() == set()
+assert not dlg._scene._selection_locked
 
 # ---- re-root ----
 dlg.set_root(bb); app.processEvents()
@@ -69,7 +65,6 @@ print("B after delete:", titles)
 assert titles == ["A", "B2"], titles
 
 # ---- single-instance reuse ----
-dlg2 = w.open_flow_view  # method reference
 w._flow_view = dlg
 w.open_flow_view(a); app.processEvents()
 assert w._flow_view is dlg

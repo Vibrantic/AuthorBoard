@@ -59,6 +59,7 @@ In line with the transparency principles of <a href="https://github.com/Vibranti
 - 🧩 **Custom note types** - per notebook or global for all notebooks (Settings).
 - 🏷 **Tag auto-completion** that remembers the tags of each book.
 - 🚀 **Scales to large boards** - the renderer picks a level of detail per item from the current zoom and the number of visible notes, threads and pins, so panning and zooming stay responsive on boards with thousands of notes and threads.
+- 🗃 **Group frames** - select notes and press `Ctrl+G`: a titled, coloured frame moves its notes together. Membership is geometric (the topmost frame containing a note's centre wins), frames can be nested, locked and dimmed with their notes.
 
 **Write**
 - ✍️ **Full-size rich-text editor** - fonts, bold / italic / underline / strike-through, text colour, highlighter, alignment, lists, **links that open in the web browser** (Ctrl+click) and **images**.
@@ -86,7 +87,8 @@ In line with the transparency principles of <a href="https://github.com/Vibranti
 | ![Bookshelf](docs/images/shelf.png) <br> *Bookshelf with colourable, draggable shelves* | ![Focus mode](docs/images/focus-mode.png) <br> *Focus mode: only the selection and its connections stay bright* |
 | ![Editor](docs/images/editor.png) <br> *Full-size editor with formatting and comments* | ![Timeline](docs/images/timeline.png) <br> *Timeline with information bubble* |
 | ![Comments](docs/images/comments.png) <br> *Comments tab* | ![Help](docs/images/help.png) <br> *Searchable documentation* |
-
+| ![Groups](docs/images/groups.png) <br> *Group frames, one nested inside another* | ![FlowView](docs/images/flowview.png) <br> *FlowView with minimap and note list* |
+| ![FlowView path](docs/images/flowview-path.png) <br> *Path highlight to a distant note* | |
 ## Installation
 
 Requirements: **Python 3.10 or newer**.

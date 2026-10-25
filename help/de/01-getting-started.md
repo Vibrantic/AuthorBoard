@@ -22,5 +22,7 @@
 - [Arbeiten auf dem Board](topic:04-board)
 - [Der große Editor](topic:07-editor)
 - [Tastenkürzel](topic:16-shortcuts)
+- [Gruppen](topic:19-groups)
+- [FlowView](topic:20-flowview)
 
 Mit dem Suchfeld oben links in diesem Fenster findest du jedes Wort der Dokumentation.

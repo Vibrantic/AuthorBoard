@@ -21,6 +21,8 @@ SCRIPTS = [
     ("test_i18n.py", []),
     ("test_showcase.py", ["de"]),
     ("test_showcase.py", ["en"]),
+    ("test_groups.py", []),
+    ("test_flow_view.py", []),
 ]
 
 
