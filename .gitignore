@@ -32,6 +32,13 @@ MANIFEST
 *.manifest
 *.spec
 
+# Build artifacts
+installer/_version.iss
+installer/Output/
+dist/
+build/
+*.spec
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
