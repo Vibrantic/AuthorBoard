@@ -2,99 +2,114 @@
 
 ## 1.2.4
 
-A polish release. The main user-visible change is that the manual is now
-complete in both languages, and that the update dialog no longer stalls the
-UI on a slow connection. Files, settings and the file format are unchanged.
+The first release with a fully functional in-app updater. Once installed
+via `AuthorBoard-Setup-1.2.4.exe`, future updates arrive through the app
+itself.
+
+### ⚠️ Users on 1.2.3 must install 1.2.4 manually — once.
+
+The updater in 1.2.3 has a bug that prevents successful updates: a 250 MB
+download would silently time out, and if it *did* succeed, Windows would
+lock the files and the installer would crash. This release fixes both
+issues. But because the bug is in the code of 1.2.3 itself, it cannot fix
+itself.
+
+**What to do if you are on 1.2.3 (or earlier):** download
+`AuthorBoard-Setup-1.2.4.exe` and run it. It installs over your existing
+copy and keeps all your notebooks, settings and attachments. From 1.2.4
+onward, in-app updates work reliably.
+
+### Added
+
+- **Windows installer (`AuthorBoard-Setup-1.2.4.exe`).** Per-user install
+  to `%LOCALAPPDATA%\AuthorBoard\` (no UAC prompt), Start Menu entry,
+  optional desktop shortcut, uninstaller.
+- **In-app update check.** AuthorBoard queries
+  `github.com/<owner>/<repo>/releases/latest` shortly after startup and
+  on demand via **Help → Check for updates…**.
+- **Update dialog with release-notes preview.** Renders the GitHub release
+  Markdown natively, with **Update now**, **Remind me tomorrow** (1-day
+  skip), **Remind me in a week** (7-day skip) and **Later** (ask again on
+  next start).
+- **Reliable download via `curl.exe`.** `QNetworkAccessManager` cannot
+  reliably download a 250 MB archive on the GUI thread (the socket stalls
+  while the UI is blocked). The updater now shells out to
+  `curl.exe` (built into Windows 10/11), with a `QNetworkAccessManager`
+  fallback for platforms without `curl`.
+- **Download progress dialog.** Replaces the status-bar text with a
+  dedicated, non-modal dialog showing a live progress bar, the MB count,
+  and a **scrollable log** with every diagnostic step (HTTP status,
+  redirects, byte counts, error messages). The user can copy the log to
+  paste into a support ticket.
+- **Automatic restart.** On successful download, hands off to a small
+  standalone `AuthorBoardUpdater.exe` which replaces the app folder
+  without failing on locked files, and relaunches AuthorBoard.
+- **Skip state persisted in `QSettings`.** A newer release always
+  overrides a skip.
 
 ### Fixed
 
-- **The English manual was incomplete and one link was broken.** `help/en/`
-  was missing `16-shortcuts`, `17-troubleshooting`, `18-about-license`,
-  `19-groups` and the FlowView chapter, so English readers saw a shorter
-  manual than German readers. The FlowView chapter was also shipped as
-  `20-flows.md`, while the *Getting started* page links to `topic:20-flowview`
-  — clicking that link in the English manual did nothing. The chapter is
-  now `20-flowview.md`, all five missing chapters are present, and every
-  `topic:` link in both languages resolves to a real file.
-
-- **The manual described double-click on a note as "add a pin" in five
-  places.** Since 1.1.1, double-click on a note opens the full-size editor;
-  pins are added only via the right-click menu → *Pin hier hinzufügen*. The
-  statement was corrected in `help/de/01-getting-started.md`,
-  `help/de/04-board.md`, `help/de/16-shortcuts.md`, the English equivalents,
-  and `README.md` (Quick start step 4 and the mouse summary).
-
-- **`MainWindow._on_update_available` reconnected three signals on every
-  update prompt.** Each "Update now" added another `download_finished` /
-  `download_failed` / `download_progress` connection to the same
-  `UpdateChecker`. After a failed download followed by a retry,
-  `_start_installer` fired twice on success, launching two updater
-  processes that raced to replace the same folder. The signals are now
-  connected once, in `MainWindow.__init__`.
-
-- **Download progress updated the status bar on every received chunk.**
-  `QNetworkReply.downloadProgress` fires on every `readyRead` — hundreds of
-  `showMessage` calls per second for a large archive, enough to make the
-  progress readout stutter. The handler now only updates the status bar
-  when the integer percent changes.
-
-- **The updater window opened with the OS (light) palette.** The main app
-  uses a dark theme, so the sequence was: dark app → light updater →
-  dark app. `updater_main.py` now applies the same dark palette as
-  `theme.apply_dark_palette` (inlined, to avoid pulling `theme` and `i18n`
-  into the minimal updater bundle).
-
-- **The updater crashed on installs under `C:\Program Files\`.**
-  `UpdaterWorker.run` created its staging folder with
-  `tempfile.mkdtemp(dir=os.path.dirname(self.target_dir))`. On a
-  per-machine install, that directory is not writable by a non-elevated
-  process, so `mkdtemp` raised `PermissionError` before the progress bar
-  appeared. The staging folder is now created next to the install when
-  that folder is writable, and falls back to `%TEMP%` otherwise.
-
-- **A malformed update archive could leave the install with no
-  executable.** The updater validated the archive's top-level structure
-  but not its contents: a zip with a single top-level folder that did not
-  contain `AuthorBoard.exe` was accepted, the working install was renamed
-  away, and the user was left with a folder that no longer started. The
-  updater now checks for the executable inside the extracted archive
-  *before* touching the current install.
+- **Downloads timed out silently in 1.2.3.** Fixed by moving the download
+  to `curl.exe` (see above).
+- **`[WinError 32]` locked files during update.** 1.2.3 tried to rename
+  the entire `AuthorBoard` folder while Windows was still holding file
+  locks (antivirus scanning the DLLs, OS releasing handles). Fixed by
+  changing the update strategy from a *folder rename* to a *direct file
+  overwrite* (`shutil.copy2`), which Windows handles gracefully without
+  needing the folder lock. Also added a 30-second retry loop that
+  specifically waits for `AuthorBoard.exe` to be unlocked.
+- **Instant shutdown on update.** `main.py` now uses `os._exit(0)` after
+  launching the updater, rather than `self.close()`. This bypasses Qt's
+  slow teardown and releases the file lock on `AuthorBoard.exe` instantly,
+  preventing the updater from racing the shutdown.
+- **Hidden CMD window.** The `curl.exe` process runs silently
+  (`CREATE_NO_WINDOW`), so no black console window flashes on screen.
+- **Progress bar stuttering.** The download progress was updated hundreds
+  of times per second, causing the status bar to stutter. It now polls
+  the file size on disk every 100ms, resulting in smooth, readable
+  progress.
+- **Language switch raised `TypeError`.** `switch_language` unpacked
+  `QProcess.startDetached(...)` as `(ok, pid)` (the PyQt5 signature).
+  PySide6 returns a plain `bool`. Fixed.
+- **Language switch could leave the app closed without reopening it.**
+  On a frozen build where the relaunch fails, the window was closed
+  *before* attempting relaunch. Now the relaunch is attempted first; on
+  failure the window stays open and shows a warning.
+- **Stale search haystack after a note-type rename.** The per-note cache
+  is now invalidated when the type registry changes.
+- **`BoardScene.note_matches` was missing the `haystack` parameter.**
+  Loading any notebook raised `TypeError` on the first tree refresh. Fixed.
+- **`AboutDialog` credits drifted from `version.py`.** The dialog now
+  reads the `AUTHOR_*` constants live.
+- **Manual corrections.** Fixed the English manual missing 5 chapters,
+  fixed the broken `topic:20-flowview` link, and corrected the
+  "double-click adds a pin" error (it opens the editor) across `README.md`
+  and the manuals.
+- **Test robustness.** Fixed `test_showcase.py` to read raw JSON instead
+  of `GroupData` objects, and gave `test_inspector_stability.py` real
+  assertions instead of just prints.
 
 ### Changed
 
-- **The release body now tells users which asset to download.**
-  `README.md` and the 1.2.3 release notes did not explain that the
-  `AuthorBoard-<version>-windows.zip` asset is only consumed by the in-app
-  updater, and that a user upgrading from 1.2.2 must use
-  `AuthorBoard-Setup-<version>.exe`. The release notes for 1.2.4 include a
-  short "Which file do I download?" section.
-
-- **The installer version is now read from `version.py` at build time.**
-  `build_windows.py` writes `installer/_version.iss` with the current
-  `version.__version__` before invoking `iscc`, and `installer/AuthorBoard.iss`
-  reads it via `ReadIni(AddBackslash(SourcePath) + "_version.iss", ...)`.
-  `About → Version` and `AuthorBoard-Setup-<version>.exe` can no longer
-  disagree. If `iscc` is not on PATH, the build still succeeds and prints
-  where to install Inno Setup; a `--no-installer` / `--no-iscc` flag
-  suppresses the installer step.
-
-- **`build_windows.py` prints the exact release assets and file names.**
-  After a successful build the script prints the three files to produce
-  and upload (`AuthorBoard-Setup-<version>.exe`,
-  `AuthorBoard-<version>-windows.zip`), with the exact names the in-app
-  updater expects. The single most common release-time mistake — uploading
-  the zip under a different name and then shipping a release that every
-  installed copy reports as "no build for this platform" — becomes a
-  one-line visual check at the end of the build output.
+- **`build_windows.py` builds two bundles.** The main app and the
+  standalone updater, plus it automatically runs `iscc` to create the
+  installer if Inno Setup is installed. It writes the version from
+  `version.py` into `installer/_version.iss` so the installer and the
+  app never disagree.
+- **`build_windows.py` cleans stale artifacts** for each bundle name
+  before rebuilding.
+- **`HIDDEN` list extended** with `flow_view`, `group_item`, `updater`,
+  `updater_dialog`, `paths`.
 
 ### Compatibility
 
-- **Files:** no format change. Every 1.2.3 `.json` notebook opens in 1.2.4
-  unchanged, and vice versa.
-- **Settings:** no key added, removed or renamed.
-- **Update mechanism:** unchanged from 1.2.3. If you are already on 1.2.3,
-  the in-app updater offers 1.2.4 automatically. If you are on 1.2.2 or
-  earlier, install 1.2.4 via `AuthorBoard-Setup-1.2.4.exe`.
+- **Files:** no format change. Files saved by 1.2.3 open in 1.2.4, and
+  vice versa.
+- **Settings:** existing `QSettings` keys are unaffected.
+- **Install layout changes for new installs.** 1.2.2 and earlier were a
+  zip folder. Users upgrading from 1.2.2 should delete the extracted
+  folder after installing 1.2.4; user data in `~/.authorboard/` is not
+  touched by either path.
 - **No public API change.**
 
 ## 1.2.3
