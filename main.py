@@ -701,20 +701,6 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------ Undo / Redo / Dirty
 
-    def _snapshot(self):
-        """Build a Snapshot with structural sharing against the previous one."""
-        project = self.build_project_data(for_file=False)
-        notes_json, conn_json, meta_json = Storage.snapshot_parts(
-            project, self._note_json_cache
-        )
-        # Update the cache with the new (id -> (json, signature)) mapping.
-        # The signature is just the JSON itself; identity comparison is what
-        # matters for sharing, and the dict keeps the same string objects.
-        self._note_json_cache = {
-            nid: (js, js) for nid, js in notes_json.items()
-        }
-        return Snapshot(notes_json, conn_json, meta_json)
-
     def capture_state(self):
         """Serialise the board for undo / dirty detection (structural sharing)."""
         project = self.build_project_data(for_file=False)
@@ -787,7 +773,6 @@ class MainWindow(QMainWindow):
         self.update_dirty()
 
     def apply_state(self, state, old=None):
-        """Rebuild the board from a snapshot, changing only the notes that differ."""
         from models import ConnectionData, NoteTypeData
 
         selected = [i.model.id for i in self.scene.selectedItems()
@@ -798,6 +783,7 @@ class MainWindow(QMainWindow):
 
         self._restoring = True
         try:
+            # --- notes: unchanged (already incremental) ---
             for nid in list(changed):
                 item = self.scene.note_lookup.get(nid)
                 if item is not None:
@@ -815,20 +801,51 @@ class MainWindow(QMainWindow):
                     self.note_types[nd.note_type] = NoteTypeData(
                         nd.note_type, nd.note_type, nd.color)
                 self.scene.add_note_item(nd)
-            for c in list(self.scene.connection_items):
-                self.scene.remove_connection(c)
-            for cd in (json.loads(state.connections) if state.connections else []):
+
+            # --- connections: reconcile by id ---
+            wanted = {
+                cd["id"]: cd
+                for cd in (json.loads(state.connections) if state.connections else [])
+            }
+            # Drop connections that no longer exist (or whose endpoints changed —
+            # we cannot re-route an existing QGraphicsPathItem to different pins).
+            to_remove = []
+            for conn in self.scene.connection_items:
+                w = wanted.get(conn.model.id)
+                if w is None:
+                    to_remove.append(conn)
+                    continue
+                if (w["start_pin_id"] != conn.model.start_pin_id
+                        or w["end_pin_id"] != conn.model.end_pin_id):
+                    to_remove.append(conn)
+                    continue
+                # Colour / label only → update in place, no scene churn.
+                if conn.model.color != w.get("color", ""):
+                    conn.model.color = w.get("color", "")
+                    conn.update()
+                if conn.model.label != w.get("label", ""):
+                    conn.model.label = w.get("label", "")
+                    conn._invalidate_label()
+                    conn.update()
+            for conn in to_remove:
+                self.scene.remove_connection(conn)
+
+            existing_ids = {c.model.id for c in self.scene.connection_items}
+            for cid, cd in wanted.items():
+                if cid in existing_ids:
+                    continue
                 start = self.scene.pin_lookup.get(cd["start_pin_id"])
                 end = self.scene.pin_lookup.get(cd["end_pin_id"])
                 if start is None or end is None:
                     continue
                 self.scene.add_connection(
                     ConnectionData(
-                        id=cd["id"], start_pin_id=cd["start_pin_id"],
+                        id=cid, start_pin_id=cd["start_pin_id"],
                         end_pin_id=cd["end_pin_id"],
                         color=cd.get("color", ""), label=cd.get("label", ""),
                     ), start, end)
 
+            # --- groups: unchanged (already cheap) ---
             self.scene.clear_groups()
             for gd in json.loads(state.meta).get("groups", []):
                 self.scene.add_group_item(Storage.group_from_dict(gd))
@@ -882,6 +899,9 @@ class MainWindow(QMainWindow):
         """Restart AuthorBoard with a different UI language.
 
         Asks to save first; if the user cancels, nothing happens.
+        If the process cannot be relaunched (frozen binary moved, no exec
+        permission, sandbox), the window stays open and the user is told
+        to restart manually — the language choice is already persisted.
         """
         if code == i18n.current_language():
             return
@@ -912,14 +932,31 @@ class MainWindow(QMainWindow):
         # the new process can read the old value if it starts before we exit.
         QSettings(SETTINGS_ORG, SETTINGS_APP).sync()
 
-        # Close without prompting (we already prompted above).
-        self._closing_for_switch = True
-        self.close()
-
-        # Start the new instance.
+        # Try to relaunch in a fresh process.  A language switch needs every
+        # widget rebuilt from scratch, so a new process is the cleanest path.
+        # NOTE: PySide6's QProcess.startDetached returns a plain bool
+        # (unlike PyQt5's (bool, pid) tuple).
         program = sys.executable
         arguments = [] if getattr(sys, "frozen", False) else [sys.argv[0]]
-        QProcess.startDetached(program, arguments)
+        ok = QProcess.startDetached(program, arguments)
+
+        if not ok:
+            # The relaunch failed (frozen binary moved / no exec bit /
+            # sandbox).  Do NOT close — otherwise the user is left with
+            # nothing.  The language is already persisted in QSettings,
+            # so the next manual launch will show the new language.
+            QMessageBox.warning(
+                self,
+                tr("Neustart fehlgeschlagen"),
+                tr("AuthorBoard konnte nicht neu gestartet werden. "
+                   "Bitte starten Sie die Anwendung von Hand neu — "
+                   "die gewählte Sprache wird beim nächsten Start verwendet."),
+            )
+            return
+
+        # Relaunch succeeded: close this instance without prompting again.
+        self._closing_for_switch = True
+        self.close()
 
     def _teardown(self):
         """Stop timers and remove the global event filter before closing."""
@@ -2028,6 +2065,7 @@ class MainWindow(QMainWindow):
 
         if keep_unknown:
             for n in self.scene.note_lookup.values():
+                n._haystack = None
                 key = n.model.note_type
                 if key not in self.note_types:
                     self.note_types[key] = NoteTypeData(key, key, n.model.color)

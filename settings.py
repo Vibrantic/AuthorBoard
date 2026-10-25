@@ -20,8 +20,8 @@ by all other modules so that a change is visible everywhere immediately.
 import json
 import os
 
-from library import app_home
 from models import NoteTypeData
+from paths import app_home
 
 # Default values.  Unknown keys in the file are kept, missing keys fall back here.
 DEFAULTS = {

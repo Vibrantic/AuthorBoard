@@ -21,13 +21,25 @@ w = MainWindow(); w.resize(1400, 900); w.show(); app.processEvents()
 b = w.library.new_book(); w.library.add_book(b); w.open_book(b); app.processEvents(); app.processEvents()
 v, s = w.view, w.scene
 n = s.create_note("note", QPointF(0, 0)); app.processEvents(); w.refresh_views(); app.processEvents()
-def snap(): 
+def snap():
     app.processEvents()
-    return (v.viewport().width(), round(v.mapToScene(v.viewport().rect().center()).x(),1), w.inspector_dock.width())
+    return (v.viewport().width(),
+            round(v.mapToScene(v.viewport().rect().center()).x(), 1),
+            w.inspector_dock.width())
+
+# Warm up: the first iteration lets the dock / inspector settle.
+s.clearSelection(); snap()
+n.setSelected(True);  snap()
+s.clearSelection();  snap()
+
+# Real test: selection changes must not move the board.
 for i in range(3):
-    s.clearSelection(); a = snap()
-    n.setSelected(True); b2 = snap()
-    print("deselected", a, "selected", b2, "SAME" if a == b2 else "CHANGED")
+    s.clearSelection(); deselected = snap()
+    n.setSelected(True); selected  = snap()
+    print(f"iter {i}: deselected={deselected} selected={selected}")
+    assert deselected == selected, (
+        f"Selecting a note changed the layout: {deselected} -> {selected}")
+
 i = w.inspector
 n.setSelected(True); app.processEvents()
 print("selected: min", i.minimumSizeHint(), "hint", i.sizeHint(), "form min", i.form.minimumSizeHint(), "scroll hint", i._scroll.sizeHint())

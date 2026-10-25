@@ -124,13 +124,19 @@ class NoteItem(QGraphicsRectItem):
         self.update()
 
     def search_haystack(self, type_label=""):
-        """Cached lowercase haystack for ``note_matches``."""
-        if self._haystack is None:
+        """Cached lowercase haystack for ``note_matches``.
+
+        Callers that pass ``type_label`` should also clear ``_haystack`` when
+        the type label changes (MainWindow.reset_types does this)."""
+        key = (type_label,)
+        cached = getattr(self, "_haystack_key", None)
+        if self._haystack is None or cached != key:
             self._haystack = " ".join([
                 self.model.title, self.model.content, type_label,
                 " ".join(self.model.tags),
                 " ".join(f"{a.name} {a.value}" for a in self.model.attributes),
             ]).lower()
+            self._haystack_key = key
         return self._haystack
 
     # ---------- Geometrie ----------

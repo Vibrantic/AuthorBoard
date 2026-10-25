@@ -669,13 +669,16 @@ class BoardScene(QGraphicsScene):
         self._filter = (text, type_key, tag, status)
         self.reapply_filter()
 
-    def note_matches(self, note):
+    def note_matches(self, note: NoteData, text: str = "", type_key: str = "",
+                     tag: str = "", type_label: str = "",
+                     status: str = "") -> bool:
         """True when a note matches the current search / filter."""
         text, type_key, tag, status = self._filter
         info = self.note_types.get(note.model.note_type)
+        label = info.label if info else ""
         return note_matches(
-            note.model, text, type_key, tag,
-            info.label if info else "", status
+            note.model, text, type_key, tag, label, status,
+            haystack=note.search_haystack(),  # ← no type_label
         )
 
     def _selected_notes(self):

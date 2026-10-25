@@ -51,10 +51,15 @@ w.shelf.search.setText("")
 # Drag&Drop in andere Kategorie
 sc = w.shelf.scene
 it2 = [i for i in sc.items() if isinstance(i, BookItem) and i.book is b2][0]
+
+before_cat = b2.category_id
 y1 = sc.rows[cats[1].id][0]
 it2.setPos(it2.pos().x(), (y1[0] + y1[1]) / 2 - it2.H / 2)
 sc.drop_book(it2); app.processEvents(); app.processEvents()
 assert b2.category_id == cats[1].id, b2.category_id
+assert b2 in lib.books_in(cats[1].id)
+assert b2 not in lib.books_in(before_cat)
+assert lib.books.index(b2) >= 0
 print("drop ok; order:", [b.title for b in lib.books])
 
 # Kategorie umbenennen/verschieben/löschen (Library-Logik)

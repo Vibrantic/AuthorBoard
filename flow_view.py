@@ -1812,8 +1812,6 @@ class NoteListPanel(QWidget):
         self._view = None          # FlowView, set via FlowView.set_note_list
         self._entries = []         # list[(nid, title, is_active)]
         self._selected_id = None   # id(note) of the currently highlighted silhouette
-        self.search = QLineEdit()
-        self.search.installEventFilter(self)
 
         self.setObjectName("NoteListPanel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -2084,15 +2082,6 @@ class FlowViewDialog(QDialog):
             self._view._end_pan()
             self._sync_inspector_width()
 
-    def showEvent(self, event):
-        super().showEvent(event)
-        self._view._end_pan()  # ← new line
-        if not self._user_moved:
-            self._view.fit_all()
-        self._view._reposition_minimap()
-        self.minimap.refresh()
-        self._sync_inspector_width()
-
     def _refresh_note_list(self):
         """Mirror the minimap's drawn set (active + nearest silhouettes
         + path) into the note list.  Beyond this set there is no walkable
@@ -2217,10 +2206,12 @@ class FlowViewDialog(QDialog):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._view._end_pan()  # ← new line
         if not self._user_moved:
             self._view.fit_all()
         self._view._reposition_minimap()
         self.minimap.refresh()
+        self._sync_inspector_width()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

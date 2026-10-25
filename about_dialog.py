@@ -22,9 +22,14 @@ from PySide6.QtWidgets import (
 )
 
 from i18n import tr
-from version import APP_NAME, LICENSE_NAME, __version__
+from version import (
+    APP_NAME, LICENSE_NAME, __version__,
+    AUTHOR_MAINTAINER, AUTHOR_AI_INITIAL, AUTHOR_AI_PERFORMANCE,
+)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+from html import escape
 
 
 class LicenseDialog(QDialog):
@@ -101,6 +106,10 @@ class AboutDialog(QDialog):
             f"<p>{tr('Notizbücher für Autorinnen und Autoren: ein Bücherregal, ein Korkboard mit Post-its, Pins und Fäden, Zeitleiste, Rich-Text-Editor mit Kommentaren und vieles mehr.')}</p>"
             + h(tr("Entwicklung"))
             + f"<p>{tr('AuthorBoard entstand in einer fortlaufenden Zusammenarbeit zwischen einem menschlichen Maintainer und zwei KI-Assistenten: <b>Konzept, Richtung und Übersicht</b> durch die Autorinnen und Autoren des Projekts, <b>erste Umsetzung, Architektur, Handbuch und Beispielprojekte</b> durch <b>Claude</b> (Anthropic), <b>Performance-Arbeit, Level-of-Detail-Rendering, Zeitleisten-Neufassung, Undo-Umbau und Fehlerbehebungen</b> durch <b>DeepSeek</b>.')}</p>"
+            + h(tr("Team"))
+            + f"<p>{tr('Maintainer', )}: <b>{escape(AUTHOR_MAINTAINER)}</b><br>"
+              f"{tr('KI-Unterstützung', )}: "
+              f"{escape(AUTHOR_AI_INITIAL)} · {escape(AUTHOR_AI_PERFORMANCE)}</p>"
             + h(tr("Wie es entstanden ist"))
             + f"<p>{tr('Jede Funktion, jedes Layout und jede Leistungsverbesserung wurde vom Maintainer angestoßen, ausprobiert und abgenommen. Die Umsetzung entstand im Dialog mit diesem Feedback und wurde nach jedem Schritt geprüft – von der ersten Veröffentlichung über die Leistungsüberarbeitung bis zu den letzten Detailkorrekturen.')}</p>"
             + h(tr("Technik"))

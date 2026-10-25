@@ -109,6 +109,18 @@ STATUS_INFO = {
 }
 
 
+def status_label(key, default=""):
+    """Translated display name of a status key (``""`` for an empty key)."""
+    info = STATUS_INFO.get(key)
+    return tr(info[0]) if info else default
+
+
+def status_color(key):
+    """Colour of a status key (``""`` for an empty key)."""
+    info = STATUS_INFO.get(key)
+    return info[1] if info else ""
+
+
 @dataclass
 class PinData:
     """A pin on a note; coordinates are relative to the note."""
@@ -200,7 +212,7 @@ class ProjectData:
 
 def note_matches(note: NoteData, text: str = "", type_key: str = "",
                  tag: str = "", type_label: str = "",
-                 status: str = "") -> bool:
+                 status: str = "", haystack: str = None) -> bool:
     """Filter-/Suchlogik. Alle Suchwörter müssen irgendwo vorkommen."""
 
     if type_key and note.note_type != type_key:
@@ -218,13 +230,14 @@ def note_matches(note: NoteData, text: str = "", type_key: str = "",
     if not words:
         return True
 
-    haystack = " ".join([
-        note.title,
-        note.content,
-        type_label,
-        " ".join(note.tags),
-        " ".join(f"{a.name} {a.value}" for a in note.attributes),
-    ]).lower()
+    if haystack is None:
+        haystack = " ".join([
+            note.title,
+            note.content,
+            type_label,
+            " ".join(note.tags),
+            " ".join(f"{a.name} {a.value}" for a in note.attributes),
+        ]).lower()
 
     return all(w in haystack for w in words)
 

@@ -500,5 +500,8 @@
   "Minimap ein-/ausblenden": "Show / hide the minimap",
   "FlowView — Wurzelknoten entfernt": "FlowView — root node removed",
   "Ziehen: Gruppe samt Notizen verschieben\nDoppelklick: umbenennen\nRechtsklick: Menü": "Drag: move the group with its notes\nDouble-click: rename\nRight-click: menu",
-  "Rahmen um die ausgewählten Notizen anlegen; er verschiebt sie gemeinsam (Strg+G)": "Create a frame around the selected notes; it moves them together (Ctrl+G)"
+  "Rahmen um die ausgewählten Notizen anlegen; er verschiebt sie gemeinsam (Strg+G)": "Create a frame around the selected notes; it moves them together (Ctrl+G)",
+  "Team": "Team",
+  "Maintainer": "Maintainer",
+  "KI-Unterstützung": "AI assistance"
 }

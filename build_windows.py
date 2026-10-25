@@ -19,8 +19,6 @@ import os
 import subprocess
 import sys
 
-import flow_view
-
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SEP = ";"   # PyInstaller --add-data / --add-binary use ';' on Windows
 

@@ -29,6 +29,7 @@ from typing import List
 
 from i18n import N_, tr
 from models import AttributeData, generate_id
+from paths import app_home
 
 BOOK_COLORS = [
     "#8d6e63", "#5c6bc0", "#26a69a", "#ab47bc",
@@ -36,13 +37,6 @@ BOOK_COLORS = [
 ]
 
 DEFAULT_CATEGORIES = [N_("Romane"), N_("Kurzgeschichten"), N_("Ideen & Projekte")]
-
-
-def app_home() -> str:
-    """Folder that holds all AuthorBoard data (``AUTHORBOARD_HOME`` or ``~/.authorboard``)."""
-    return os.environ.get("AUTHORBOARD_HOME") or os.path.join(
-        os.path.expanduser("~"), ".authorboard"
-    )
 
 
 def _now() -> str:

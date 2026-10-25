@@ -1,5 +1,92 @@
 # Changelog
 
+## 1.2.2
+
+A bugfix release. No file-format change: 1.2.2 reads every 1.2.1 file, and
+1.2.1 reads every 1.2.2 file.
+
+### Fixed
+
+- **FlowView crashed on open.** `NoteListPanel.__init__` called
+  `self.search.installEventFilter(self)` *before* `self.search` was assigned,
+  so constructing a `FlowViewDialog` raised `AttributeError` from inside a
+  signal handler, the dialog was never shown, and the user saw "nothing
+  happens". The duplicate `self.search = QLineEdit()` lower in `__init__`
+  is the real widget; the stray pre-emptive filter line has been removed.
+- **Language switch could quit the app without reopening it.** On a frozen
+  build where the relaunch fails (binary moved, no exec permission,
+  sandboxed), `switch_language` closed the current window *before* attempting
+  the relaunch, leaving the user with a closed app and no new instance. The
+  relaunch is now attempted first; on failure the window stays open and a
+  warning explains that the next manual start will use the new language
+  (the choice is already persisted in `QSettings`). The language menu
+  checkmark is also restored to the actual current language on cancel, as
+  intended.
+- **`QProcess.startDetached` in `switch_language` was unpacked as
+  `(ok, pid)`.** PySide6 returns a plain `bool` (the `(bool, qint64)` tuple
+  only exists in PyQt5). The unpack raised `TypeError` and the language
+  switch never completed. Now uses the PySide6 signature.
+- **`BoardScene.note_matches` missed the new `haystack` parameter** that
+  `NoteItem.search_haystack` was added to feed. The search filter raised
+  `TypeError: note_matches() got an unexpected keyword argument 'haystack'`
+  on the first `refresh_tree()` after loading a book. The function now
+  accepts an optional `haystack` (default `None`, builds it from the note
+  as before), and the scene passes the cached one.
+- **Stale search haystack after a note-type rename.** Renaming a note type
+  (book or global) updated the visible label but not the cached search
+  haystack of notes that use the type, so typing the new label did not
+  match them until each note was touched. The per-note haystack cache is
+  now invalidated whenever the type registry changes
+  (`MainWindow.reset_types`) and whenever the label differs from the one
+  baked into the cache (guarded by `NoteItem._haystack_key`).
+- **`AboutDialog` and `version.py` disagreed.** The three `AUTHOR_*`
+  constants in `version.py` were unused by `AboutDialog` (which hard-coded
+  the same names in its HTML), so editing them had no effect. `AboutDialog`
+  now imports and displays them live, in a small "Team" section; the prose
+  remains fully translatable.
+
+### Changed
+
+- **Undo / redo is cheaper on boards with many threads.** `apply_state`
+  used to destroy and recreate *every* connection item on every undo/redo
+  step, invalidating the scene's item index and forcing a full repaint.
+  Connections are now reconciled by id: only removed ones are dropped, only
+  new ones are added, and colour / label edits are applied in place. Cost
+  is now O(changed connections) instead of O(all connections).
+- **`models.note_matches` accepts a cached haystack** (optional
+  `haystack` keyword) so callers can skip the O(len(note)) string build.
+  `BoardScene.note_matches` uses this.
+- **Test robustness.** `tests/test_showcase.py` no longer asserts exact
+  fixture counts (10 groups, 16 timeline entries, 51 notes) — those
+  properties changed every time the showcase was edited. The test now
+  asserts the *invariants* the showcase is meant to exercise (at least one
+  group with valid geometry, at least one dated note, at least one undated
+  note, all timeline entries ↔ parsable dates, both a nested and a locked
+  frame, etc.). The `GroupData` vs. raw-JSON mistake (indexing dataclasses
+  like dicts) is fixed. `tests/test_inspector_stability.py` now has real
+  `assert` statements (the previous version only printed diagnostics).
+  `tests/test_shelf_library.py` documents the y-axis snap that its
+  `drop_book` setup depends on and asserts invariants rather than one
+  hard-coded category id.
+
+### Documentation
+
+- `tests/test_showcase.py` now has a `# NOTE:` explaining why it validates
+  the raw JSON file rather than `Storage.load(...)` output.
+- `tests/test_shelf_library.py` now has a `# NOTE:` about `drop_book`
+  snapping by y; if that ever changes, the test's drop-position setup must
+  change too.
+
+### Compatibility
+
+- No `storage.FORMAT_VERSION` bump. Files saved by 1.2.1 open unchanged in
+  1.2.2, and 1.2.2 writes files that 1.2.1 opens.
+- PySide6's `QProcess.startDetached` returns `bool` — code that ran against
+  PyQt5's `(bool, pid)` tuple is no longer compatible and has been fixed
+  here. No user-facing API change.
+- No public API (module-level function, class, or attribute listed in the
+  docs) was removed.
+
 ## 1.2.1
 
 Group frames, a fix for undo, and a fix for the stuck mouse cursor.
