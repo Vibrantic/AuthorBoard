@@ -9,6 +9,7 @@
 """About dialog: version, origin, licence and disclaimer."""
 
 import os
+from html import escape
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -28,8 +29,6 @@ from version import (
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-from html import escape
 
 
 class LicenseDialog(QDialog):

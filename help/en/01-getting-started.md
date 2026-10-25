@@ -13,8 +13,9 @@
 1. On the start page (the bookshelf) click **＋ Notebook**, enter a title and press *Create*. The board opens.
 2. **Double-click the empty board** to create a note, or press **Shift+Space** and pick a note type such as *Character* or *Chapter*.
 3. Select the note and fill in the **Inspector** on the right: title, tags, attributes and text.
-4. **Double-click a note** to put a pin on it. Make a second note with a pin, then hold the **right mouse button** on one pin and drag to the other pin. A thread connects them. Right-click the thread to add a label such as "brother of".
-5. Press **Ctrl+S** to save and **Ctrl+B** to return to the bookshelf.
+4. **Double-click a note** opens a big editor. 
+5. Right click create pin. Make a second note with a pin, then hold the **right mouse button** on one pin and drag to the other pin. A thread connects them. Right-click the thread to add a label such as "brother of".
+6. Press **Ctrl+S** to save and **Ctrl+B** to return to the bookshelf.
 
 ## Where to read more
 

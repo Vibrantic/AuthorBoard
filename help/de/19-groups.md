@@ -13,6 +13,7 @@ Notizen lassen sich später durch **Ziehen in den Rahmen** hinzufügen, wenn du 
 ## Gruppe bearbeiten
 
 - **Ziehen am Rahmenrand**: die ganze Gruppe verschiebt sich mit allen Notizen.
+- **Gesperrte Notizen**: werden nicht mit dem Rahmen mitgezogen.
 - **Rechtsklick auf den Rahmen → Gruppe umbenennen …**: Titel der Gruppe.
 - **Gruppenfarbe**: Vorgaben, eigene Farbe oder Standard – färbt den Rahmen, nicht die Notizen.
 - **Gruppe nach vorne**: holt den Rahmen (und nur ihn) vor alle Notizen.

@@ -96,6 +96,9 @@ n2 = [x for x in w.scene.note_lookup.values() if x.model.title == "Mira"][0]
 assert n2.model.locked and len(n2.model.attachments) == 3 and n2.model.comments and rt.COMMENT_PREFIX in n2.model.rich
 w.inspector.set_note(n2); app.processEvents()
 img = w.attachments.image(n2.model.attachments[-1].id); assert img is not None
-assert w.inspector.content_edit.document().resource(2, __import__("PySide6.QtCore", fromlist=["QUrl"]).QUrl("attachment:" + att.id)) is not None or True
+url = QUrl("attachment:" + att.id)
+resource = w.inspector.content_edit.document().resource(
+    QTextDocument.ResourceType.ImageResource, url)
+assert resource is not None, "image resource should resolve from the attachment store"
 w.grab().save(os.path.join(TMP, "integration.png"))
 print("ALL OK")

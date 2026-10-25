@@ -1,5 +1,102 @@
 # Changelog
 
+## 1.2.4
+
+A polish release. The main user-visible change is that the manual is now
+complete in both languages, and that the update dialog no longer stalls the
+UI on a slow connection. Files, settings and the file format are unchanged.
+
+### Fixed
+
+- **The English manual was incomplete and one link was broken.** `help/en/`
+  was missing `16-shortcuts`, `17-troubleshooting`, `18-about-license`,
+  `19-groups` and the FlowView chapter, so English readers saw a shorter
+  manual than German readers. The FlowView chapter was also shipped as
+  `20-flows.md`, while the *Getting started* page links to `topic:20-flowview`
+  — clicking that link in the English manual did nothing. The chapter is
+  now `20-flowview.md`, all five missing chapters are present, and every
+  `topic:` link in both languages resolves to a real file.
+
+- **The manual described double-click on a note as "add a pin" in five
+  places.** Since 1.1.1, double-click on a note opens the full-size editor;
+  pins are added only via the right-click menu → *Pin hier hinzufügen*. The
+  statement was corrected in `help/de/01-getting-started.md`,
+  `help/de/04-board.md`, `help/de/16-shortcuts.md`, the English equivalents,
+  and `README.md` (Quick start step 4 and the mouse summary).
+
+- **`MainWindow._on_update_available` reconnected three signals on every
+  update prompt.** Each "Update now" added another `download_finished` /
+  `download_failed` / `download_progress` connection to the same
+  `UpdateChecker`. After a failed download followed by a retry,
+  `_start_installer` fired twice on success, launching two updater
+  processes that raced to replace the same folder. The signals are now
+  connected once, in `MainWindow.__init__`.
+
+- **Download progress updated the status bar on every received chunk.**
+  `QNetworkReply.downloadProgress` fires on every `readyRead` — hundreds of
+  `showMessage` calls per second for a large archive, enough to make the
+  progress readout stutter. The handler now only updates the status bar
+  when the integer percent changes.
+
+- **The updater window opened with the OS (light) palette.** The main app
+  uses a dark theme, so the sequence was: dark app → light updater →
+  dark app. `updater_main.py` now applies the same dark palette as
+  `theme.apply_dark_palette` (inlined, to avoid pulling `theme` and `i18n`
+  into the minimal updater bundle).
+
+- **The updater crashed on installs under `C:\Program Files\`.**
+  `UpdaterWorker.run` created its staging folder with
+  `tempfile.mkdtemp(dir=os.path.dirname(self.target_dir))`. On a
+  per-machine install, that directory is not writable by a non-elevated
+  process, so `mkdtemp` raised `PermissionError` before the progress bar
+  appeared. The staging folder is now created next to the install when
+  that folder is writable, and falls back to `%TEMP%` otherwise.
+
+- **A malformed update archive could leave the install with no
+  executable.** The updater validated the archive's top-level structure
+  but not its contents: a zip with a single top-level folder that did not
+  contain `AuthorBoard.exe` was accepted, the working install was renamed
+  away, and the user was left with a folder that no longer started. The
+  updater now checks for the executable inside the extracted archive
+  *before* touching the current install.
+
+### Changed
+
+- **The release body now tells users which asset to download.**
+  `README.md` and the 1.2.3 release notes did not explain that the
+  `AuthorBoard-<version>-windows.zip` asset is only consumed by the in-app
+  updater, and that a user upgrading from 1.2.2 must use
+  `AuthorBoard-Setup-<version>.exe`. The release notes for 1.2.4 include a
+  short "Which file do I download?" section.
+
+- **The installer version is now read from `version.py` at build time.**
+  `build_windows.py` writes `installer/_version.iss` with the current
+  `version.__version__` before invoking `iscc`, and `installer/AuthorBoard.iss`
+  reads it via `ReadIni(AddBackslash(SourcePath) + "_version.iss", ...)`.
+  `About → Version` and `AuthorBoard-Setup-<version>.exe` can no longer
+  disagree. If `iscc` is not on PATH, the build still succeeds and prints
+  where to install Inno Setup; a `--no-installer` / `--no-iscc` flag
+  suppresses the installer step.
+
+- **`build_windows.py` prints the exact release assets and file names.**
+  After a successful build the script prints the three files to produce
+  and upload (`AuthorBoard-Setup-<version>.exe`,
+  `AuthorBoard-<version>-windows.zip`), with the exact names the in-app
+  updater expects. The single most common release-time mistake — uploading
+  the zip under a different name and then shipping a release that every
+  installed copy reports as "no build for this platform" — becomes a
+  one-line visual check at the end of the build output.
+
+### Compatibility
+
+- **Files:** no format change. Every 1.2.3 `.json` notebook opens in 1.2.4
+  unchanged, and vice versa.
+- **Settings:** no key added, removed or renamed.
+- **Update mechanism:** unchanged from 1.2.3. If you are already on 1.2.3,
+  the in-app updater offers 1.2.4 automatically. If you are on 1.2.2 or
+  earlier, install 1.2.4 via `AuthorBoard-Setup-1.2.4.exe`.
+- **No public API change.**
+
 ## 1.2.3
 
 The first release with a Windows installer and a built-in updater. Once

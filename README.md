@@ -111,9 +111,10 @@ python main.py
 1. On the bookshelf click **＋ Notebook**, give it a title and press *Create*.
 2. **Double-click the board** to create a note - or press **Shift+Space** and pick a note type.
 3. Fill in the **Inspector** (right): title, tags, attributes, text, attachments.
-4. **Double-click a note** to add a pin. Hold the **right mouse button** on a pin and drag it onto another pin to connect them with a thread.
-5. Press **F2** for the full-size editor. Select words, right-click → *Add comment …*.
-6. **Ctrl+S** saves, **Ctrl+B** returns to the bookshelf, **F1** opens the documentation.
+4. **Double-click a note** to open the full-size editor. To add a pin, use the note's right-click menu → Add pin here. 
+5. Hold the **right mouse button** on a pin and drag it onto another pin to connect them with a thread.
+6. Press **F2** for the full-size editor. Select words, right-click → *Add comment …*.
+7. **Ctrl+S** saves, **Ctrl+B** returns to the bookshelf, **F1** opens the documentation.
 
 ## Showcase project
 
@@ -137,7 +138,7 @@ On the bookshelf click **Importieren … / Import …** and select the file. Boo
 | `F1` | Documentation | `Ctrl+K` (editor) | Insert link |
 | `Ctrl+Alt+M` (editor) | Add comment | `F11` (editor) | Full screen |
 
-Mouse: wheel = zoom, middle button = pan, right-drag pin → pin = thread, double-click board = note, double-click note = pin.
+Mouse: wheel = zoom, middle button = pan, right-drag pin → pin = thread, double-click board = note, double-click note = big editor.
 
 ## Languages
 

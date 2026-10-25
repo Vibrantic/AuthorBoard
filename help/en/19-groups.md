@@ -13,6 +13,7 @@ You can add more notes later by **dragging them into the frame**, unless you loc
 ## Editing a group
 
 - **Drag the frame edge**: the whole group moves with its notes.
+- **Locked notes** won't be moved with a group frame.
 - **Right-click the frame → Rename group …**: the group's title.
 - **Group color**: presets, custom color or default – colors the frame, not the notes.
 - **Bring group to front**: brings only the frame in front of the notes.

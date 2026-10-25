@@ -9,7 +9,7 @@
 """Version and project metadata shown in the About dialog and the docs."""
 
 # version.py (additions)
-__version__ = "1.2.3"
+__version__ = "1.2.4"
 APP_NAME = "AuthorBoard"
 LICENSE_NAME = "GNU General Public License v3.0 or later"
 LICENSE_SPDX = "GPL-3.0-or-later"

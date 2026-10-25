@@ -20,7 +20,7 @@
 |---|---|
 | Shift+Space | Find a note type and create a note |
 | Double-click board | New note |
-| Double-click note | Add a pin |
+| Double-click note | Open the full-size editor |
 | Right-drag pin → pin | Connect with a thread |
 | Middle mouse drag | Pan |
 | Mouse wheel | Zoom |

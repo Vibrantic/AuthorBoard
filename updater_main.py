@@ -26,11 +26,12 @@ from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtWidgets import (
     QApplication, QDialog, QLabel, QProgressBar, QPushButton, QVBoxLayout,
 )
-
+from PySide6.QtGui import QPalette, QColor
 
 # --------------------------------------------------------------------------
 # Worker (runs off the GUI thread so the progress bar stays responsive)
 # --------------------------------------------------------------------------
+
 
 class UpdaterWorker(QThread):
     progress = Signal(int, str)     # percent, status text
@@ -48,20 +49,32 @@ class UpdaterWorker(QThread):
             self.progress.emit(5, "Warte auf AuthorBoard …")
             self._wait_for_main()
 
-            staging = tempfile.mkdtemp(prefix="ab-update-",
-                                       dir=os.path.dirname(self.target_dir))
+            # Use the install folder if writable (fast — same volume),
+            # fall back to %TEMP% otherwise (Program Files case).
+            parent = os.path.dirname(self.target_dir)
+            try:
+                staging = tempfile.mkdtemp(prefix="ab-update-", dir=parent)
+            except OSError:
+                staging = tempfile.mkdtemp(prefix="ab-update-")
+
             try:
                 self.progress.emit(20, "Entpacke Update …")
                 with zipfile.ZipFile(self.zip_path) as z:
                     z.extractall(staging)
 
-                # The zip contains a single top-level folder (the onedir bundle).
                 entries = os.listdir(staging)
                 if len(entries) != 1 or not os.path.isdir(
                         os.path.join(staging, entries[0])):
                     raise RuntimeError(
                         f"Unerwartete Zip-Struktur: {entries!r}")
                 new_root = os.path.join(staging, entries[0])
+
+                exe_name = ("AuthorBoard.exe" if sys.platform == "win32"
+                            else "AuthorBoard")
+                if not os.path.isfile(os.path.join(new_root, exe_name)):
+                    raise RuntimeError(
+                        f"The update archive does not contain {exe_name}. "
+                        f"Aborting without touching the current install.")
 
                 self.progress.emit(50, "Sichere alte Version …")
                 backup = self.target_dir + ".old"
@@ -73,7 +86,6 @@ class UpdaterWorker(QThread):
                 try:
                     shutil.move(new_root, self.target_dir)
                 except Exception:
-                    # Rollback
                     if os.path.exists(self.target_dir):
                         shutil.rmtree(self.target_dir, ignore_errors=True)
                     os.rename(backup, self.target_dir)
@@ -173,8 +185,29 @@ class UpdaterWindow(QDialog):
 
 
 # --------------------------------------------------------------------------
+# Dark palette (mirrors theme.apply_dark_palette without importing theme,
+# which would pull in i18n / resource and bloat the updater bundle)
+# --------------------------------------------------------------------------
+
+
+def _apply_dark(app):
+    pal = QPalette()
+    R = QPalette.ColorRole
+    pal.setColor(R.Window, QColor("#16171b"))
+    pal.setColor(R.WindowText, QColor("#e6e6ea"))
+    pal.setColor(R.Base, QColor("#1e1f24"))
+    pal.setColor(R.AlternateBase, QColor("#26272e"))
+    pal.setColor(R.Text, QColor("#e6e6ea"))
+    pal.setColor(R.Button, QColor("#26272e"))
+    pal.setColor(R.ButtonText, QColor("#e6e6ea"))
+    pal.setColor(R.Highlight, QColor("#6c9cff"))
+    pal.setColor(R.HighlightedText, QColor("#101114"))
+    app.setPalette(pal)
+
+# --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
+
 
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -186,6 +219,7 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("AuthorBoard Updater")
     app.setStyle("Fusion")
+    _apply_dark(app)
 
     exe_name = "AuthorBoard.exe" if sys.platform == "win32" else "AuthorBoard"
     exe_path = os.path.join(a.target, exe_name)

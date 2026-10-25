@@ -2409,10 +2409,14 @@ class MainWindow(QMainWindow):
         self._update_checker.download(info, self._update_download_dir)
 
     def _on_update_progress(self, received, total):
-        if total > 0:
-            pct = int(received * 100 / total)
-            self.statusBar().showMessage(
-                tr("Update wird heruntergeladen … {pct} %", pct=pct))
+        if total <= 0:
+            return
+        pct = int(received * 100 / total)
+        if pct == getattr(self, "_last_update_pct", -1):
+            return
+        self._last_update_pct = pct
+        self.statusBar().showMessage(
+            tr("Update wird heruntergeladen … {pct} %", pct=pct))
 
     def _on_update_download_failed(self, message):
         QMessageBox.warning(self, tr("Download fehlgeschlagen"), message)

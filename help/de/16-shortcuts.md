@@ -20,7 +20,7 @@
 |---|---|
 | Shift+Leertaste | Notizart suchen und Notiz anlegen |
 | Doppelklick auf Board | Neue Notiz |
-| Doppelklick auf Notiz | Pin setzen |
+| Doppelklick auf Notiz | Großen Editor öffnen |
 | Rechts ziehen Pin → Pin | Mit Faden verbinden |
 | Mittlere Maustaste ziehen | Verschieben |
 | Mausrad | Zoomen |
