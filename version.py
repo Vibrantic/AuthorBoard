@@ -8,12 +8,22 @@
 # version.  It is distributed WITHOUT ANY WARRANTY; see the file LICENSE.
 """Version and project metadata shown in the About dialog and the docs."""
 
+# version.py (additions)
 __version__ = "1.2.2"
 APP_NAME = "AuthorBoard"
 LICENSE_NAME = "GNU General Public License v3.0 or later"
 LICENSE_SPDX = "GPL-3.0-or-later"
 
-# Project metadata (shown in About, used by packaging tools if any).
+# GitHub release source (used by updater.py)
+GITHUB_OWNER = "Vibrantic"
+GITHUB_REPO = "AuthorBoard"
+
+# Asset naming convention for release uploads
+# (must match what build_windows.py / build_linux.py / build_macos.py produce)
+UPDATE_ASSET_WINDOWS = "AuthorBoard-{version}-windows.zip"
+UPDATE_ASSET_LINUX = "AuthorBoard-{version}-linux.tar.gz"
+UPDATE_ASSET_MACOS = "AuthorBoard-{version}-macos.zip"
+
 AUTHOR_MAINTAINER = "Vibrantic"
 AUTHOR_AI_INITIAL = "Claude (Anthropic)"
 AUTHOR_AI_PERFORMANCE = "DeepSeek"

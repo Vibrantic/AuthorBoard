@@ -130,6 +130,9 @@ from i18n import tr, N_
 from storage import FORMAT_VERSION, Storage
 from resource import resource_path
 from flow_view import FlowViewDialog
+from updater import UpdateChecker, should_prompt, ReleaseInfo
+from updater_dialog import UpdateDialog
+from version import __version__, GITHUB_OWNER, GITHUB_REPO
 
 SETTINGS_ORG = "AuthorBoard"
 SETTINGS_APP = "AuthorBoard"
@@ -268,6 +271,14 @@ class MainWindow(QMainWindow):
         self.create_toolbar()
         self.apply_theme()
 
+        self._update_checker = UpdateChecker(self)
+        self._update_checker.update_available.connect(self._on_update_available)
+        self._update_checker.up_to_date.connect(self._on_up_to_date)
+        self._update_checker.check_failed.connect(self._on_update_failed)
+        self._update_info = None
+        self._update_download_dir = os.path.join(
+            os.path.expanduser("~"), ".authorboard", "updates")
+
         self.stats_label = QLabel("")
         self.statusBar().addPermanentWidget(self.stats_label)
 
@@ -320,6 +331,7 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(self.shelf)
         self.apply_mode()
 
+        QTimer.singleShot(2000, self._check_updates_silent)
         QTimer.singleShot(300, self.check_recovery)
 
 
@@ -603,6 +615,9 @@ class MainWindow(QMainWindow):
         help_menu.addAction(self.act_help)
         help_menu.addSeparator()
         help_menu.addAction(self.act_about)
+        self.act_check_updates = self._action(
+            tr("Nach Updates suchen …"), None, self.check_updates_manual)
+        help_menu.addAction(self.act_check_updates)
 
         self._tip(self.act_lock, tr("Gesperrte Notizen bleiben an ihrem Platz (Strg+L)"))
         self._tip(self.act_settings, tr("Rechtschreibung, Notizarten, Fokus-Modus und mehr (Strg+,)"))
@@ -2347,6 +2362,95 @@ class MainWindow(QMainWindow):
             self.view._end_pan_if_active()
         except Exception:
             pass
+
+    def _check_updates_silent(self):
+        """Startup check: silent unless an update is available (and not skipped)."""
+        self._update_checker.check()
+
+    def check_updates_manual(self):
+        """Help → Check for updates…: always shows a result."""
+        self._manual_check = True
+        self._update_checker.check()
+
+    def _on_up_to_date(self):
+        if getattr(self, "_manual_check", False):
+            self._manual_check = False
+            QMessageBox.information(
+                self, tr("Keine Updates"),
+                tr("AuthorBoard {v} ist auf dem neuesten Stand.", v=__version__))
+        self.statusBar().showMessage(
+            tr("AuthorBoard {v} ist aktuell", v=__version__), 4000)
+
+    def _on_update_failed(self, message):
+        if getattr(self, "_manual_check", False):
+            self._manual_check = False
+            QMessageBox.warning(
+                self, tr("Update-Prüfung fehlgeschlagen"), message)
+        # silent startup check: do nothing — do not nag the user
+
+    def _on_update_available(self, info: ReleaseInfo):
+        from PySide6.QtCore import QSettings
+        self._manual_check = False
+        if not should_prompt(info, QSettings(SETTINGS_ORG, SETTINGS_APP)):
+            return
+
+        self._update_info = info
+        dlg = UpdateDialog(info, QSettings(SETTINGS_ORG, SETTINGS_APP), self)
+        dlg.exec()
+
+        if dlg.choice != UpdateDialog.UPDATE_NOW:
+            return
+
+        # Download, then hand off to the updater process.
+        self._update_checker.download_finished.connect(self._start_installer)
+        self._update_checker.download_failed.connect(self._on_update_download_failed)
+        self._update_checker.download_progress.connect(self._on_update_progress)
+        self.statusBar().showMessage(tr("Update wird heruntergeladen …"))
+        self._update_checker.download(info, self._update_download_dir)
+
+    def _on_update_progress(self, received, total):
+        if total > 0:
+            pct = int(received * 100 / total)
+            self.statusBar().showMessage(
+                tr("Update wird heruntergeladen … {pct} %", pct=pct))
+
+    def _on_update_download_failed(self, message):
+        QMessageBox.warning(self, tr("Download fehlgeschlagen"), message)
+
+    def _start_installer(self, zip_path: str):
+        """Launch AuthorBoardUpdater.exe and quit."""
+        from PySide6.QtCore import QProcess
+        import sys as _sys
+
+        # The updater exe is bundled next to the main exe.
+        base = os.path.dirname(_sys.executable) if getattr(_sys, "frozen", False) \
+            else os.path.dirname(os.path.abspath(__file__))
+        updater = os.path.join(base, "updater",
+                               "AuthorBoardUpdater.exe" if _sys.platform == "win32"
+                               else "AuthorBoardUpdater")
+        if not os.path.exists(updater):
+            QMessageBox.critical(
+                self, tr("Updater fehlt"),
+                tr("AuthorBoardUpdater wurde nicht gefunden:\n{path}", path=updater))
+            return
+
+        target = os.path.dirname(_sys.executable) if getattr(_sys, "frozen", False) \
+            else base
+
+        ok = QProcess.startDetached(updater, [
+            "--pid", str(os.getpid()),
+            "--zip", zip_path,
+            "--target", target,
+        ])
+        if not ok:
+            QMessageBox.critical(
+                self, tr("Update-Start fehlgeschlagen"),
+                tr("AuthorBoardUpdater konnte nicht gestartet werden."))
+            return
+
+        # Tell closeEvent to skip the save prompt (already saved above if needed).
+        self._closing_for_switch = True
+        self.close()
 
 
 def main():

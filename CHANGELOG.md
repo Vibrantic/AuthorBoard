@@ -1,5 +1,95 @@
 # Changelog
 
+## 1.2.3
+
+The first release with a Windows installer and a built-in updater. Once
+installed via `AuthorBoard-Setup-1.2.3.exe`, future updates arrive through
+the app itself.
+
+### Added
+
+- **Windows installer (`AuthorBoard-Setup-1.2.3.exe`).** Per-user install
+  to `%LOCALAPPDATA%\AuthorBoard\` (no UAC prompt), Start Menu entry,
+  optional desktop shortcut, uninstaller. Replaces the previous "download a
+  zip and extract it" workflow.
+- **In-app update check.** AuthorBoard queries
+  `github.com/<owner>/<repo>/releases/latest` shortly after startup (delayed
+  ~2 s, so the first frame is not delayed) and on demand via **Help → Check
+  for updates…**. The startup check is silent unless an update exists; the
+  manual check always reports a result.
+- **Update dialog with release-notes preview.** Renders the GitHub release
+  `body` (Markdown) in a `QTextBrowser`, with **Update now**, **Remind me
+  tomorrow** (1-day skip), **Remind me in a week** (7-day skip) and
+  **Later** (ask again on next start).
+- **Download with progress and automatic restart.** Choosing *Update now*
+  downloads the platform archive with a status-bar percentage, then hands
+  off to a small standalone `AuthorBoardUpdater.exe` that waits for the
+  main process to exit, replaces the app folder from a staged extraction
+  (rollback on failure), and relaunches AuthorBoard automatically.
+- **Skip state persisted in `QSettings`** under `updates/skip_until` and
+  `updates/skipped_version`. A newer release always overrides a skip, so
+  skipping 1.2.3 does not hide 1.2.4.
+- **26 new translation keys** for the updater UI in `locales/en.json`.
+
+### Changed
+
+- **`build_windows.py` builds two bundles.** Main app
+  (`dist/AuthorBoard/`) plus the standalone updater
+  (`dist/AuthorBoardUpdater/`), which is then staged into
+  `dist/AuthorBoard/updater/` so the release zip is self-contained and a
+  future update can still launch the updater on an older install.
+- **`build_windows.py` fails fast** — each step returns a bool, and
+  `main()` bails out on the first failure. Previously an updater build
+  failure was silently ignored.
+- **`build_windows.py` cleans stale artifacts** for each bundle name before
+  rebuilding, so a release archive never contains ghost files from an older
+  build.
+- **`HIDDEN` list extended** with `flow_view`, `group_item`, `updater`,
+  `updater_dialog` (were missing before; only mattered if PyInstaller's
+  static analysis ever missed the lazy imports).
+
+### Fixed
+
+- **Language switch raised `TypeError`.** `switch_language` unpacked
+  `QProcess.startDetached(...)` as `(ok, pid)` (the PyQt5 signature).
+  PySide6 returns a plain `bool`; the unpack raised and the switch never
+  completed. Now uses the PySide6 signature.
+- **Language switch could leave the app closed without reopening it.** On
+  a frozen build where the relaunch fails (binary moved, no exec
+  permission, sandboxed), the window was closed *before* the relaunch was
+  attempted. The relaunch is now attempted first; on failure the window
+  stays open and a warning tells the user to start AuthorBoard manually —
+  the language choice is already persisted and will be used next time.
+- **`BoardScene.note_matches` was missing the `haystack` parameter** that
+  `NoteItem.search_haystack` was added to feed. Loading any notebook raised
+  `TypeError: note_matches() got an unexpected keyword argument 'haystack'`
+  on the first tree refresh. Fixed.
+- **Stale search haystack after a note-type rename.** The per-note cache is
+  now invalidated on `reset_types` and when the label baked into the cache
+  differs from the current one.
+- **`AboutDialog` credits drifted from `version.py`.** The three
+  `AUTHOR_*` constants were unused; the dialog now reads them live.
+- **`tests/test_showcase.py`** no longer asserts hard-coded fixture counts;
+  it asserts the invariants the showcase is meant to demonstrate, and reads
+  raw JSON for the structural checks (fixing a
+  `TypeError: 'GroupData' object is not subscriptable`).
+- **`tests/test_inspector_stability.py`** now has real assertions (it used
+  to only print diagnostics).
+
+### Compatibility
+
+- **Files:** no format change. Files saved by 1.2.2 open in 1.2.3, and
+  vice versa.
+- **Settings:** existing `QSettings` keys are unaffected. Three new keys
+  (`updates/skip_until`, `updates/skipped_version`, plus
+  `updates/last_check` if you add throttling later) default to absent — no
+  migration needed.
+- **Install layout changes for new installs.** 1.2.2 and earlier were a
+  zip folder. Users upgrading from 1.2.2 should delete the extracted
+  folder after installing 1.2.3; user data in `~/.authorboard/` is not
+  touched by either path.
+- **No public API change.**
+
 ## 1.2.2
 
 A bugfix release. No file-format change: 1.2.2 reads every 1.2.1 file, and
