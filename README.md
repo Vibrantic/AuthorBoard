@@ -205,6 +205,10 @@ Contributions are welcome - see [CONTRIBUTING.md](CONTRIBUTING.md).
 - **User manual**: inside the program (*Help → Documentation*, `F1`) - searchable, English and German. The sources are in [`help/`](help).
 - **Developer documentation**: [`docs/`](docs), built with MkDocs (`mkdocs serve`).
 
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md)
+
 ## License
 
 AuthorBoard is free software, released under the **GNU General Public License v3.0 or later** (`GPL-3.0-or-later`). See [LICENSE](LICENSE).
