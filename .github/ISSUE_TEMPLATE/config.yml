@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 Read the Documentation
+    url: https://github.com/Vibrantic/AuthorBoard#readme
+    about: Check the manual (F1 in the app) or the README to see if your question is already answered.
+  - name: 💬 Ask a Question
+    url: https://github.com/Vibrantic/AuthorBoard/discussions
+    about: If you need help using AuthorBoard, please use the Discussions tab instead of opening an issue.
