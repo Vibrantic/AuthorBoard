@@ -1,0 +1,51 @@
+name: "✨ Feature Request"
+description: "Suggest an idea or a new feature for AuthorBoard."
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping improve AuthorBoard! 
+        
+        Before submitting a feature request, please check if a similar idea already exists in the [Issues tab](https://github.com/Vibrantic/AuthorBoard/issues?q=is%3Aissue+label%3Aenhancement).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Is your feature request related to a problem?
+      description: A clear and concise description of what the problem is. (e.g., "I'm always frustrated when...")
+      placeholder: "I find it difficult to export my notes to a specific format because..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Describe the solution you'd like
+      description: A clear and concise description of what you want to happen.
+      placeholder: "I would like a new button in the toolbar that does..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Describe alternatives you've considered
+      description: A clear and concise description of any alternative solutions or features you've considered.
+      placeholder: "I tried doing this by using the 'Copy' function, but..."
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add any other context, mockup images, or screenshots about the feature request here. (Please do not upload real writing).
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      description: By submitting this issue, you agree to follow our [Code of Conduct](https://github.com/Vibrantic/AuthorBoard/blob/main/CODE_OF_CONDUCT.md).
+      options:
+        - label: I agree to follow this project's Code of Conduct
+          required: true
