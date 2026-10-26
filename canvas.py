@@ -59,6 +59,7 @@ from PySide6.QtGui import (
     QBrush,
     QPainterPath,
     QGuiApplication,
+    QKeySequence,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -154,6 +155,12 @@ class BoardScene(QGraphicsScene):
 
         self.selectionChanged.connect(self.on_selection_changed)
         self._mentions_revision = 0
+
+        # True while BoardScene.render() is called for PNG export.  When set,
+        # every graphics item paints at full fidelity and skips the
+        # view-dependent LOD / viewport-culling logic that reads
+        # _visible_thread_count / _view_rect / _visible_pin_count.
+        self.export_mode = False
 
     # ------------------------------------------------------------ Auswahl
 
@@ -439,24 +446,64 @@ class BoardScene(QGraphicsScene):
         return GROUP_COLORS[len(self.group_lookup) % len(GROUP_COLORS)]
 
     def create_group_from_selection(self):
-        """Frame the selected notes with a new group (None if nothing selected)."""
-        notes = self._selected_notes()
-        if not notes:
+        """Frame the selection with a new group; None if nothing usable is selected.
+
+        Handles three cases:
+
+        * Only notes selected → old behaviour: the new frame wraps the notes,
+          and the notes become its members (topmost frame containing their
+          centre).
+        * Only groups selected → the new frame wraps the selected groups and
+          moves them forward so it lands *behind* them (geometric nesting rule
+          requires the child to be in front of the parent).
+        * Notes **and** groups selected → union of both: notes join the new
+          frame directly, groups become its nested children.
+
+        The new group is selected afterwards, so the user can rename, move or
+        lock it immediately.
+        """
+        notes = self.selected_notes()
+        groups = self.selected_groups()
+
+        if not notes and not groups:
             return None
+
+        # Union of the selected items' visible geometry.
         rect = None
         for n in notes:
             r = n.mapRectToScene(n.rect())
             rect = r if rect is None else rect.united(r)
+        for g in groups:
+            r = g.scene_rect()  # includes header, not the drop shadow
+            rect = r if rect is None else rect.united(r)
+
         pad = 30
         data = GroupData(
-            title=tr("Gruppe"), color=self._next_group_color(),
-            x=rect.left() - pad, y=rect.top() - pad - HEADER_H,
+            title=tr("Gruppe"),
+            color=self._next_group_color(),
+            x=rect.left() - pad,
+            y=rect.top() - pad - HEADER_H,
             width=rect.width() + 2 * pad,
-            height=rect.height() + 2 * pad + HEADER_H)
-        group = self.add_group_item(data)
+            height=rect.height() + 2 * pad + HEADER_H,
+        )
+        new_group = self.add_group_item(data)
+
+        # Make sure the new frame wins the "topmost frame containing the
+        # centre" rule for the selected notes: bring it to the very top, then
+        # bring every selected group back in front of it (in their original
+        # relative order) so their nesting is preserved.
+        self.raise_group(new_group)
+
+        if groups:
+            for g in sorted(groups, key=lambda x: x.zValue()):
+                self.raise_group(g)
+
+        self.clearSelection()
+        new_group.setSelected(True)
+
         self.notes_changed.emit()
         self.interaction_finished.emit()
-        return group
+        return new_group
 
     def create_empty_group(self, pos):
         """Create an empty frame whose top-left corner is ``pos``."""
@@ -477,16 +524,147 @@ class BoardScene(QGraphicsScene):
             self.notes_changed.emit()
 
     def set_group_locked(self, group, locked):
-        """Lock / unlock a frame."""
+        """Lock / unlock a frame.
+
+        Locking cascades to every note and nested group inside the frame,
+        because a locked group would otherwise still allow its contents to be
+        dragged out of it.  Unlocking does *not* cascade — otherwise a user
+        couldn't unlock one child while keeping the parent locked, which is
+        exactly the scenario the cascade is supposed to allow.
+        """
         group.set_locked(locked)
+        if locked:
+            self._cascade_lock_on(group)
         self.notes_changed.emit()
+        self.interaction_finished.emit()
+
+    def _descendants_of_group(self, group):
+        """All notes and nested groups that are *inside* ``group`` at any depth.
+
+        Returns ``(notes, groups)`` — both lists exclude ``group`` itself.
+
+        Uses ``group_members`` so nesting semantics (child in front of parent,
+        contained rect) match everywhere else in the code.
+        """
+        if group.scene() is not self:
+            return [], []
+        frames, notes = self.group_members(group)
+        # group_members includes ``group`` itself in frames; strip it.
+        frames = [f for f in frames if f is not group]
+        return notes, frames
+
+    def _cascade_lock_on(self, root_item):
+        """Called when a group is *locked*: also lock every descendant.
+
+        The child lock flags are ordinary ``model.locked`` flags, so they can
+        be toggled independently afterwards (unlock one child, re-lock it, …).
+        Nothing inherits the parent's lock; this is a one-time cascade.
+        """
+        if not isinstance(root_item, GroupItem):
+            return
+        notes, groups = self._descendants_of_group(root_item)
+        for g in groups:
+            g.set_locked(True)
+        for n in notes:
+            n.set_locked(True)
 
     def raise_group(self, group):
-        """Put a frame above all other frames (it then wins overlaps)."""
-        self._group_z_counter += 1
-        group.setZValue(self.GROUP_Z_BASE + self._group_z_counter)
-        if self._group_z_counter > 9000:
-            self._renormalize_group_z()
+        """Put a frame above all other frames (it then wins overlaps).
+
+        Raising a group above a bigger group **detaches** it: a group is only
+        nested in another when it is in front of that other group, so bringing
+        it forward makes it a top-level group again.  Conversely, sending it
+        behind re-nests it if it lies inside a bigger group's rect.
+        """
+        if group.scene() is not self:
+            return
+
+        self._renormalize_group_z()
+        ordered = sorted(self.group_lookup.values(), key=lambda g: g.zValue())
+        if group in ordered:
+            ordered.remove(group)
+        ordered.append(group)
+
+        for i, g in enumerate(ordered, 1):
+            g.setZValue(self.GROUP_Z_BASE + i)
+        self._group_z_counter = len(ordered)
+
+        for g in self.group_lookup.values():
+            g.update()
+
+        self.notes_changed.emit()
+
+    def send_group_to_back(self, group):
+        """Put a frame below all other frames.
+
+        Like raising, this changes nesting: a group that was inside another
+        frame is *detached* (it is now behind its former parent, so it no
+        longer counts as nested).
+        """
+        if group.scene() is not self:
+            return
+
+        self._renormalize_group_z()
+        ordered = sorted(self.group_lookup.values(), key=lambda g: g.zValue())
+        if group in ordered:
+            ordered.remove(group)
+        ordered.insert(0, group)
+
+        for i, g in enumerate(ordered, 1):
+            g.setZValue(self.GROUP_Z_BASE + i)
+        self._group_z_counter = len(ordered)
+
+        for g in self.group_lookup.values():
+            g.update()
+
+        self.notes_changed.emit()
+
+    def raise_group_one_step(self, group):
+        """Move a frame one step forward in the stacking order (swap with the
+        group immediately above it).  No-op if already at the top."""
+        if group.scene() is not self:
+            return
+
+        self._renormalize_group_z()
+        ordered = sorted(self.group_lookup.values(), key=lambda g: g.zValue())
+        try:
+            idx = ordered.index(group)
+        except ValueError:
+            return
+        if idx >= len(ordered) - 1:
+            return
+
+        ordered[idx], ordered[idx + 1] = ordered[idx + 1], ordered[idx]
+        for i, g in enumerate(ordered, 1):
+            g.setZValue(self.GROUP_Z_BASE + i)
+        self._group_z_counter = len(ordered)
+
+        for g in self.group_lookup.values():
+            g.update()
+        self.notes_changed.emit()
+
+    def send_group_back_one_step(self, group):
+        """Move a frame one step backward in the stacking order (swap with the
+        group immediately below it).  No-op if already at the bottom."""
+        if group.scene() is not self:
+            return
+
+        self._renormalize_group_z()
+        ordered = sorted(self.group_lookup.values(), key=lambda g: g.zValue())
+        try:
+            idx = ordered.index(group)
+        except ValueError:
+            return
+        if idx <= 0:
+            return
+
+        ordered[idx], ordered[idx - 1] = ordered[idx - 1], ordered[idx]
+        for i, g in enumerate(ordered, 1):
+            g.setZValue(self.GROUP_Z_BASE + i)
+        self._group_z_counter = len(ordered)
+
+        for g in self.group_lookup.values():
+            g.update()
         self.notes_changed.emit()
 
     # --- geometric membership: the topmost frame containing the centre wins
@@ -495,6 +673,64 @@ class BoardScene(QGraphicsScene):
         """All frames, topmost first."""
         return sorted(self.group_lookup.values(),
                       key=lambda g: g.zValue(), reverse=True)
+
+    def _group_index_path(self, group):
+        """Return the nesting path of ``group`` as a tuple of 1-based indices.
+
+        Example: a group that is the 2nd child of the 1st top-level group
+        returns ``(1, 2)``. A top-level group returns ``()`` (no badge).
+
+        A group is a *child* of another group only when:
+          * it is completely inside the other group's rect, AND
+          * the other group is **behind** it (lower z-value).
+
+        A group that is in front of a bigger group is **not** its child —
+        it is its own top-level group.  This matches :meth:`group_members`.
+        """
+        if group.scene() is not self:
+            return ()
+
+        ordered = self._groups_by_z()  # topmost first
+
+        # Determine each group's parent (same rule as ``group_members``).
+        parent_of = {}
+        for g in ordered:
+            gr = g.scene_rect()
+            parent = None
+            for h in ordered:
+                if h is g:
+                    continue
+                if (h.scene_rect().contains(gr)
+                        and h.zValue() < g.zValue()):  # parent must be BEHIND
+                    parent = h
+                    break
+            parent_of[g] = parent
+
+        path = []
+        current = group
+        seen = set()
+        while True:
+            if id(current) in seen:
+                return tuple(path)
+            seen.add(id(current))
+
+            parent = parent_of.get(current)
+            if parent is None:
+                return tuple(reversed(path)) if path else ()
+
+            siblings = [g for g in ordered if parent_of.get(g) is parent]
+            siblings.sort(key=lambda g: (
+                g.scene_rect().top(),
+                g.scene_rect().left(),
+                (g.model.title or "").lower(),
+            ))
+            try:
+                index = siblings.index(current) + 1
+            except ValueError:
+                return tuple(reversed(path))
+
+            path.append(index)
+            current = parent
 
     def note_group(self, note, ordered=None):
         """The frame a note belongs to (None = no frame)."""
@@ -510,9 +746,16 @@ class BoardScene(QGraphicsScene):
         """``(frames, notes)`` that move with ``group``, locked ones included.
 
         Notes: those whose winning frame is ``group`` or one of its nested
-        frames.  A frame is nested when it lies completely inside a frame
-        that is the topmost one containing it."""
-        ordered = self._groups_by_z()
+        frames.
+
+        A frame is nested in a parent when:
+          * it lies completely inside the parent's rect, AND
+          * it is **in front of** the parent (higher z-value).
+        A frame behind a bigger frame is *not* nested in it — it is its own
+        top-level frame.  This is what makes "bring group to front"
+        detach a previously nested group instead of leaving it attached.
+        """
+        ordered = self._groups_by_z()  # topmost first
         moved = {group}
         changed = True
         while changed:
@@ -521,8 +764,13 @@ class BoardScene(QGraphicsScene):
                 if h in moved:
                     continue
                 hr = h.scene_rect()
-                parent = next((g for g in ordered
-                               if g is not h and g.scene_rect().contains(hr)), None)
+                parent = next(
+                    (g for g in ordered
+                     if g is not h
+                     and g.scene_rect().contains(hr)
+                     and g.zValue() < h.zValue()),  # parent must be BEHIND child
+                    None,
+                )
                 if parent is not None and parent in moved:
                     moved.add(h)
                     changed = True
@@ -530,11 +778,158 @@ class BoardScene(QGraphicsScene):
                  if self.note_group(n, ordered) in moved]
         return moved, notes
 
+    def group_chain_for_note(self, note):
+        """The chain of groups a note belongs to, outermost first.
+
+        Returns ``[]`` if the note is not in any group.  Uses the same rule as
+        :meth:`group_members` and :meth:`_group_index_path`: a note belongs to
+        the topmost group whose rect contains its centre, and that group may
+        itself be nested in a bigger group (only if the bigger one is
+        *behind* it).
+
+        Walking up gives the full chain, e.g.::
+
+            [big_frame, inner_frame]    # note is inside inner_frame, which
+                                        # is inside big_frame
+        """
+        if note.scene() is not self:
+            return []
+
+        ordered = self._groups_by_z()  # topmost first
+
+        # 1. Winner: the topmost group containing the note's centre.
+        centre = note.mapToScene(note.rect().center())
+        winner = None
+        for g in ordered:
+            if g.scene_rect().contains(centre):
+                winner = g
+                break
+        if winner is None:
+            return []
+
+        # 2. Walk up to the outermost parent.
+        chain = [winner]
+        current = winner
+        seen = {id(current)}
+        while True:
+            parent = None
+            for g in ordered:
+                if g is current:
+                    continue
+                if id(g) in seen:
+                    continue
+                if (g.scene_rect().contains(current.scene_rect())
+                        and g.zValue() < current.zValue()):
+                    parent = g
+                    break
+            if parent is None:
+                break
+            chain.append(parent)
+            seen.add(id(parent))
+            current = parent
+
+        chain.reverse()  # outermost first
+        return chain
+
     def group_block(self, group):
-        """``[(item, start_pos)]`` of everything a header drag moves (unlocked only)."""
+        """``[(item, start_pos)]`` of everything a group drag moves.
+
+        Every note and sub-group inside ``group`` moves with it, *regardless*
+        of whether that note/sub-group is individually locked.  Locking only
+        prevents a user from dragging the item on its own; it does not sever
+        it from its containing frame — exactly like a locked pin still follows
+        its note.
+
+        A locked *group itself* cannot be dragged directly (its
+        ``mousePressEvent`` refuses to start a move), so this method only
+        ever runs for an unlocked group.  But that group's locked children
+        must still ride along.
+        """
         frames, notes = self.group_members(group)
-        return [(it, QPointF(it.pos())) for it in list(frames) + notes
-                if not it.model.locked]
+        return [(it, QPointF(it.pos())) for it in list(frames) + notes]
+
+    def build_selection_block(self):
+        """Everything a multi-item drag should move.
+
+        Rules:
+
+        *   A **note** moves if:
+              * it is unlocked and selected (free-standing), OR
+              * it is inside a selected group (locked or not — the group drags it).
+        *   A **group** moves if:
+              * it is unlocked and selected (free-standing), OR
+              * it is nested inside a selected group (locked or not — the
+                ancestor drags it).
+
+        A locked free-standing item in the selection does **not** move on its
+        own.  That mirrors the single-item drag behaviour (a locked note can't
+        be dragged directly; a locked pin can't be dragged directly).
+
+        Returns ``[(item, start_pos)]``.  Empty if nothing movable is selected.
+        """
+        selected = list(self.selectedItems())
+        selected_notes = {it for it in selected if isinstance(it, NoteItem)}
+        selected_groups = {it for it in selected if isinstance(it, GroupItem)}
+
+        if not selected_notes and not selected_groups:
+            return []
+
+        # Notes and sub-groups covered by a *selected group's* block.  These
+        # move via that group; we must not add them again with their own pos.
+        covered_notes = set()
+        for g in selected_groups:
+            _, notes = self.group_members(g)
+            covered_notes.update(notes)
+
+        # Free-standing notes: selected and *not* covered by a selected group.
+        # Locked free-standing notes are excluded — they must not move on their
+        # own.  Their inclusion in ``covered_notes`` (if they happen to live
+        # inside a selected group) already covers the "moves with the group" case.
+        free_notes = {
+            n for n in selected_notes
+            if n not in covered_notes and not n.model.locked
+        }
+
+        # Free-standing groups: selected, unlocked, and not nested inside a
+        # selected group.  Locked groups that are *inside* a selected ancestor
+        # move via the ancestor's block; locked groups at the top level stay put.
+        # We compute the ancestor relation using the same rule the rest of the
+        # code uses (`group_chain_for_group`), so nesting semantics match.
+        free_groups = []
+        for g in selected_groups:
+            if g.model.locked:
+                continue
+            # Skip groups already covered by another selected group.
+            chain = self.group_chain_for_group(g)  # outermost first
+            covered_by_selection = any(
+                anc is not g and anc in selected_groups for anc in chain
+            )
+            if covered_by_selection:
+                continue
+            free_groups.append(g)
+
+        # Build the block: group blocks first (they include locked children),
+        # then free-standing unlocked notes, then free-standing unlocked groups.
+        block = []
+        seen_ids = set()
+
+        def add(item):
+            if id(item) in seen_ids:
+                return
+            seen_ids.add(id(item))
+            block.append((item, QPointF(item.pos())))
+
+        for g in selected_groups:
+            for it, _start in self.group_block(g):
+                add(it)
+
+        for n in free_notes:
+            add(n)
+
+        for g in free_groups:
+            add(g)
+
+        return block
 
     def move_block(self, block, delta):
         """Move all items of ``block`` by ``delta`` (grid snapping applies to the delta)."""
@@ -564,6 +959,46 @@ class BoardScene(QGraphicsScene):
             self.remove_note(n)
         for g in list(frames):
             self.remove_group(g)
+
+    def ungrouped_order_list(self):
+        """Return the live manual-ordering list for ungrouped notes.
+
+        Stored on the scene so the tree stays in sync without a separate
+        round-trip through ProjectData on every drag; ProjectData copies it
+        in/out on save/load.
+        """
+        if not hasattr(self, "_ungrouped_order"):
+            self._ungrouped_order = []
+        return self._ungrouped_order
+
+    def group_chain_for_group(self, group):
+        """The chain of groups that contains ``group`` (outermost first, incl. self).
+
+        Same rule as :meth:`group_chain_for_note`: each ancestor is a group
+        whose rect contains this one *and* is behind it in z-order.
+        """
+        if group.scene() is not self:
+            return []
+        ordered = self._groups_by_z()
+        chain = [group]
+        current = group
+        seen = {id(current)}
+        while True:
+            parent = None
+            for g in ordered:
+                if g is current or id(g) in seen:
+                    continue
+                if (g.scene_rect().contains(current.scene_rect())
+                        and g.zValue() < current.zValue()):
+                    parent = g
+                    break
+            if parent is None:
+                break
+            chain.append(parent)
+            seen.add(id(parent))
+            current = parent
+        chain.reverse()
+        return chain
 
     # ------------------------------------------------------------- Fäden
 
@@ -650,6 +1085,12 @@ class BoardScene(QGraphicsScene):
         self.notes_changed.emit()
         self._mentions_revision += 1
 
+        if hasattr(self, "_ungrouped_order"):
+            self._ungrouped_order.clear()
+
+        if hasattr(self, "_top_level_order"):
+            self._top_level_order.clear()
+
     def content_rect(self, include_groups=True):
         """Bounding rectangle of all notes (and group frames); None when empty."""
         rect = None
@@ -690,6 +1131,48 @@ class BoardScene(QGraphicsScene):
             if note is not None and note not in notes:
                 notes.append(note)
         return notes
+
+    def selected_notes(self):
+        """All selected NoteItems."""
+        return [i for i in self.selectedItems() if isinstance(i, NoteItem)]
+
+    def selected_pins(self):
+        """All selected PinItems."""
+        return [i for i in self.selectedItems() if isinstance(i, PinItem)]
+
+    def selected_groups(self):
+        """All selected GroupItems."""
+        return [i for i in self.selectedItems() if isinstance(i, GroupItem)]
+
+    def selected_connections(self):
+        """All selected ConnectionItems."""
+        return [i for i in self.selectedItems() if isinstance(i, ConnectionItem)]
+
+    def set_lock_for_selection(self, locked):
+        """Lock or unlock every lockable item in the current selection.
+
+        Applies to notes, pins and groups.  Threads are not lockable.
+        Locking a group also locks its descendant notes and nested groups
+        (one-time cascade — the children can be unlocked individually
+        afterwards).  Emits one notes_changed / interaction_finished pair so
+        undo sees the whole gesture as a single checkpoint.
+        """
+        notes = self.selected_notes()
+        pins = self.selected_pins()
+        groups = self.selected_groups()
+
+        for n in notes:
+            n.set_locked(locked)
+        for p in pins:
+            p.set_locked(locked)
+        for g in groups:
+            g.set_locked(locked)
+            if locked:
+                self._cascade_lock_on(g)
+
+        self._emit_selected(self._current_note, force=True)
+        self.notes_changed.emit()
+        self.interaction_finished.emit()
 
     def direct_neighbours(self, note):
         """Return ``[(pin_index, other_note, connection_item), …]``.
@@ -1032,43 +1515,125 @@ class BoardScene(QGraphicsScene):
         custom.triggered.connect(lambda _=False: self._pick_color(current, callback))
 
     def show_context_menu(self, item, screen_pos, scene_pos):
-        """Context menu for a pin, thread, note or the empty board."""
+        """Context menu for a pin, thread, note, group or the empty board.
+
+        Multi-selection aware: if the right-clicked item is part of a larger
+        selection of same-kind items, the menu reflects that and applies the
+        action to every item of that kind in the selection.  Right-clicking an
+        unselected item replaces the selection with it first (standard desktop
+        convention).
+        """
         views = self.views()
         menu = QMenu(views[0] if views else None)
 
+        # Preserve the current multi-selection if the clicked item is part of it.
+        if item is not None and not item.isSelected():
+            self.clearSelection()
+            item.setSelected(True)
+        elif item is None:
+            # Right-click on empty board: keep selection (so the user can still
+            # act on it via the menu below), but the empty-board branch does not
+            # need any selection-preservation logic.
+            pass
+
+        lockable = (
+                self.selected_notes()
+                + self.selected_pins()
+                + self.selected_groups()
+        )
+        kinds = {type(x) for x in lockable}
+        mixed_lock = len(kinds) > 1
+
+        if mixed_lock and item is not None:
+            any_unlocked = any(not x.model.locked for x in lockable)
+            lock_label = tr("Auswahl entsperren") if not any_unlocked else tr("Auswahl sperren")
+            lock_action = menu.addAction(lock_label)
+            lock_action.setShortcut(QKeySequence("Ctrl+L"))
+            lock_action.triggered.connect(
+                lambda _=False, v=any_unlocked: self.set_lock_for_selection(v))
+            menu.addSeparator()
+
+        # ---- PIN ----
         if isinstance(item, PinItem):
-            self._add_color_menu(menu, tr("Pinfarbe"), item.model.color, item.set_color)
-            if item.connections:
+            pins = self.selected_pins()
+            plural = len(pins) > 1
+            self._add_color_menu(
+                menu,
+                tr("Pinfarben") if plural else tr("Pinfarbe"),
+                item.model.color,
+                lambda c: self._apply_color_to_pins(pins, c),
+            )
+            if plural:
+                menu.addAction(tr("Fäden dieser Pins entfernen")).triggered.connect(
+                    lambda _=False: self._remove_connections_of_pins(pins))
+            elif item.connections:
                 menu.addAction(tr("Fäden dieses Pins entfernen")).triggered.connect(
                     lambda _=False: (item.remove_connections(), self.notes_changed.emit()))
-            if item.model.locked:
-                menu.addAction(tr("Pin entsperren")).triggered.connect(
-                    lambda _=False: self.set_pin_locked(item, False))
-            else:
-                menu.addAction(tr("Pin sperren")).triggered.connect(
-                    lambda _=False: self.set_pin_locked(item, True))
             menu.addSeparator()
-            menu.addAction(tr("Pin löschen")).triggered.connect(
-                lambda _=False: (item.note.remove_pin(item), self.notes_changed.emit()))
+            if not mixed_lock:
+                if plural:
+                    if all(p.model.locked for p in pins):
+                        label = tr("Pins entsperren")
+                        target = False
+                    else:
+                        label = tr("Pins sperren")
+                        target = True
+                    menu.addAction(label).triggered.connect(
+                        lambda _=False, v=target: self._apply_lock_to_pins(pins, v))
+                else:
+                    if item.model.locked:
+                        menu.addAction(tr("Pin entsperren")).triggered.connect(
+                            lambda _=False: self.set_pin_locked(item, False))
+                    else:
+                        menu.addAction(tr("Pin sperren")).triggered.connect(
+                            lambda _=False: self.set_pin_locked(item, True))
+            menu.addSeparator()
+            if plural:
+                menu.addAction(tr("Pins löschen")).triggered.connect(
+                    lambda _=False: self._delete_pins(pins))
+            else:
+                menu.addAction(tr("Pin löschen")).triggered.connect(
+                    lambda _=False: (item.note.remove_pin(item), self.notes_changed.emit()))
 
+        # ---- THREAD ----
         elif isinstance(item, ConnectionItem):
-            self._add_color_menu(menu, tr("Fadenfarbe"), item.model.color, item.set_color)
+            threads = self.selected_connections()
+            plural = len(threads) > 1
+            self._add_color_menu(
+                menu,
+                tr("Fadenfarben") if plural else tr("Fadenfarbe"),
+                item.model.color,
+                lambda c: self._apply_color_to_connections(threads, c),
+            )
 
             def edit_label():
+                default = item.model.label if not plural else ""
+                title = tr("Beschriftungen") if plural else tr("Beschriftung")
                 text, ok = QInputDialog.getText(
-                    views[0] if views else None, tr("Beschriftung"),
-                    tr("Beziehung / Text auf dem Faden:"), text=item.model.label)
+                    views[0] if views else None, title,
+                    tr("Beziehung / Text auf dem Faden:"), text=default)
                 if ok:
-                    item.set_label(text)
+                    for t in threads if plural else [item]:
+                        t.set_label(text)
                     self.notes_changed.emit()
 
-            menu.addAction(tr("Beschriftung …")).triggered.connect(lambda _=False: edit_label())
+            menu.addAction(
+                tr("Beschriftungen …") if plural else tr("Beschriftung …")
+            ).triggered.connect(lambda _=False: edit_label())
             menu.addSeparator()
-            menu.addAction(tr("Faden löschen")).triggered.connect(
-                lambda _=False: (self.remove_connection(item), self.notes_changed.emit()))
+            if plural:
+                menu.addAction(tr("Fäden löschen")).triggered.connect(
+                    lambda _=False: self._delete_connections(threads))
+            else:
+                menu.addAction(tr("Faden löschen")).triggered.connect(
+                    lambda _=False: (self.remove_connection(item), self.notes_changed.emit()))
 
+        # ---- NOTE ----
         elif isinstance(item, NoteItem):
+            notes = self.selected_notes()
+            plural = len(notes) > 1
             local = item.mapFromScene(scene_pos)
+
             menu.addAction(tr("Im großen Editor öffnen")).triggered.connect(
                 lambda _=False: self.edit_requested.emit(item))
             menu.addAction(tr("FlowView öffnen")).triggered.connect(
@@ -1078,14 +1643,12 @@ class BoardScene(QGraphicsScene):
             menu.addAction(tr("Gruppe aus Auswahl")).triggered.connect(
                 lambda _=False: self.create_group_from_selection())
 
-            # Only useful if the note actually has neighbours.
             has_connections = bool(item.links())
             select_direct = menu.addAction(tr("Verbundene Notizen auswählen"))
             select_direct.setEnabled(has_connections)
             select_direct.setToolTip(
                 tr("Diese Notiz und alle direkt verbundenen Notizen auswählen"))
-            select_direct.triggered.connect(
-                lambda _=False: self.select_connected(item))
+            select_direct.triggered.connect(lambda _=False: self.select_connected(item))
 
             select_recursive = menu.addAction(
                 tr("Verbundene Notizen rekursiv auswählen"))
@@ -1096,18 +1659,32 @@ class BoardScene(QGraphicsScene):
                 lambda _=False: self.select_connected(item, recursive=True))
 
             menu.addSeparator()
-            menu.addAction(tr("Pin hier hinzufügen")).triggered.connect(
-                lambda _=False: item.add_pin(local.x(), local.y()))
-            if item.model.locked:
-                menu.addAction(tr("Notiz entsperren")).triggered.connect(
-                    lambda _=False: self.set_note_locked(item, False))
-            else:
-                menu.addAction(tr("Notiz sperren")).triggered.connect(
-                    lambda _=False: self.set_note_locked(item, True))
+            if not plural:
+                menu.addAction(tr("Pin hier hinzufügen")).triggered.connect(
+                    lambda _=False: item.add_pin(local.x(), local.y()))
 
-            def set_status(key):
-                item.model.status = key
-                item.model_changed()
+            # Lock: fan-out when multiple notes are selected.
+            if not mixed_lock:
+                if plural:
+                    if all(n.model.locked for n in notes):
+                        menu.addAction(tr("Notizen entsperren")).triggered.connect(
+                            lambda _=False: self._apply_lock_to_notes(notes, False))
+                    else:
+                        menu.addAction(tr("Notizen sperren")).triggered.connect(
+                            lambda _=False: self._apply_lock_to_notes(notes, True))
+                else:
+                    if item.model.locked:
+                        menu.addAction(tr("Notiz entsperren")).triggered.connect(
+                            lambda _=False: self.set_note_locked(item, False))
+                    else:
+                        menu.addAction(tr("Notiz sperren")).triggered.connect(
+                            lambda _=False: self.set_note_locked(item, True))
+
+            # Status: fan-out to all selected notes when plural.
+            def set_status(key, _notes=notes):
+                for n in _notes:
+                    n.model.status = key
+                    n.model_changed()
                 self._emit_selected(self._current_note, force=True)
                 self.notes_changed.emit()
 
@@ -1118,39 +1695,91 @@ class BoardScene(QGraphicsScene):
                 status_menu.addAction(color_icon(col), tr(label)).triggered.connect(
                     lambda _=False, k=key: set_status(k))
 
-            def set_note_color(c):
-                item.model.color = c
-                item.model_changed()
-                self._emit_selected(self._current_note, force=True)
-
-            self._add_color_menu(menu, tr("Notizfarbe"), item.model.color, set_note_color)
+            self._add_color_menu(
+                menu,
+                tr("Notizfarben") if plural else tr("Notizfarbe"),
+                item.model.color,
+                lambda c: self._apply_color_to_notes(notes, c),
+            )
             menu.addSeparator()
-            menu.addAction(tr("Notiz löschen")).triggered.connect(
-                lambda _=False: self.remove_note(item))
-
-        elif isinstance(item, GroupItem):
-            menu.addAction(tr("Gruppe umbenennen …")).triggered.connect(
-                lambda _=False: self.rename_group(item))
-
-            def set_group_color(c):
-                item.set_color(c)
-                self.notes_changed.emit()
-
-            self._add_color_menu(menu, tr("Gruppenfarbe"), item.model.color, set_group_color)
-            if item.model.locked:
-                menu.addAction(tr("Gruppe entsperren")).triggered.connect(
-                    lambda _=False: self.set_group_locked(item, False))
+            if plural:
+                menu.addAction(tr("Notizen löschen")).triggered.connect(
+                    lambda _=False: self._delete_notes(notes))
             else:
-                menu.addAction(tr("Gruppe sperren")).triggered.connect(
-                    lambda _=False: self.set_group_locked(item, True))
-            menu.addAction(tr("Gruppe nach vorne")).triggered.connect(
-                lambda _=False: self.raise_group(item))
-            menu.addSeparator()
-            menu.addAction(tr("Gruppe auflösen")).triggered.connect(
-                lambda _=False: self.remove_group(item))
-            menu.addAction(tr("Gruppe samt Notizen löschen")).triggered.connect(
-                lambda _=False: self.delete_group_with_notes(item))
+                menu.addAction(tr("Notiz löschen")).triggered.connect(
+                    lambda _=False: self.remove_note(item))
 
+        # ---- GROUP ----
+        elif isinstance(item, GroupItem):
+            groups = self.selected_groups()
+            plural = len(groups) > 1
+
+            if not plural:
+                menu.addAction(tr("Gruppe umbenennen …")).triggered.connect(
+                    lambda _=False: self.rename_group(item))
+
+            self._add_color_menu(
+                menu,
+                tr("Gruppenfarben") if plural else tr("Gruppenfarbe"),
+                item.model.color,
+                lambda c: self._apply_color_to_groups(groups, c),
+            )
+
+            # Lock: same plural/single pattern as notes and pins.
+            if not mixed_lock:
+                if plural:
+                    if all(g.model.locked for g in groups):
+                        menu.addAction(tr("Gruppen entsperren")).triggered.connect(
+                            lambda _=False: self._apply_lock_to_groups(groups, False))
+                    else:
+                        menu.addAction(tr("Gruppen sperren")).triggered.connect(
+                            lambda _=False: self._apply_lock_to_groups(groups, True))
+                else:
+                    if item.model.locked:
+                        menu.addAction(tr("Gruppe entsperren")).triggered.connect(
+                            lambda _=False: self.set_group_locked(item, False))
+                    else:
+                        menu.addAction(tr("Gruppe sperren")).triggered.connect(
+                            lambda _=False: self.set_group_locked(item, True))
+
+            # NEW: wrap the selection in a new parent group (notes + groups).
+            menu.addSeparator()
+            menu.addAction(tr("Gruppe aus Auswahl")).triggered.connect(
+                lambda _=False: self.create_group_from_selection())
+
+            # Z-order: four actions, fan out to every selected group when plural.
+            menu.addSeparator()
+            if plural:
+                menu.addAction(tr("Gruppen nach vorne")).triggered.connect(
+                    lambda _=False: self._raise_groups(groups))
+                menu.addAction(tr("Gruppen eine Ebene nach vorne")).triggered.connect(
+                    lambda _=False: self._raise_groups_one_step(groups))
+                menu.addAction(tr("Gruppen eine Ebene nach hinten")).triggered.connect(
+                    lambda _=False: self._send_groups_back_one_step(groups))
+                menu.addAction(tr("Gruppen nach hinten")).triggered.connect(
+                    lambda _=False: self._send_groups_to_back(groups))
+            else:
+                menu.addAction(tr("Gruppe nach vorne")).triggered.connect(
+                    lambda _=False: self.raise_group(item))
+                menu.addAction(tr("Gruppe eine Ebene nach vorne")).triggered.connect(
+                    lambda _=False: self.raise_group_one_step(item))
+                menu.addAction(tr("Gruppe eine Ebene nach hinten")).triggered.connect(
+                    lambda _=False: self.send_group_back_one_step(item))
+                menu.addAction(tr("Gruppe nach hinten")).triggered.connect(
+                    lambda _=False: self.send_group_to_back(item))
+
+            # Dissolve / delete.
+            menu.addSeparator()
+            if plural:
+                menu.addAction(tr("Gruppen auflösen")).triggered.connect(
+                    lambda _=False: self._remove_groups(groups))
+            else:
+                menu.addAction(tr("Gruppe auflösen")).triggered.connect(
+                    lambda _=False: self.remove_group(item))
+                menu.addAction(tr("Gruppe samt Notizen löschen")).triggered.connect(
+                    lambda _=False: self.delete_group_with_notes(item))
+
+        # ---- EMPTY ----
         else:
             sub = menu.addMenu(tr("Neue Notiz hier"))
             for t in self.note_types.values():
@@ -1162,12 +1791,117 @@ class BoardScene(QGraphicsScene):
 
         menu.exec(screen_pos)
 
+    def _apply_color_to_notes(self, notes, color):
+        for n in notes:
+            n.model.color = color
+            n.model_changed()
+        self._emit_selected(self._current_note, force=True)
+        self.notes_changed.emit()
+
+    def _apply_color_to_pins(self, pins, color):
+        for p in pins:
+            p.set_color(color)
+        self.notes_changed.emit()
+
+    def _apply_color_to_connections(self, threads, color):
+        for t in threads:
+            t.set_color(color)
+        self.notes_changed.emit()
+
+    def _apply_color_to_groups(self, groups, color):
+        for g in groups:
+            g.set_color(color)
+        self.notes_changed.emit()
+
+    def _apply_lock_to_notes(self, notes, locked):
+        for n in notes:
+            n.set_locked(locked)
+        self._emit_selected(self._current_note, force=True)
+        self.notes_changed.emit()
+        self.interaction_finished.emit()
+
+    def _apply_lock_to_pins(self, pins, locked):
+        for p in pins:
+            p.set_locked(locked)
+        self.notes_changed.emit()
+        self.interaction_finished.emit()
+
+    def _apply_lock_to_groups(self, groups, locked):
+        for g in groups:
+            g.set_locked(locked)
+            if locked:
+                self._cascade_lock_on(g)
+        self.notes_changed.emit()
+        self.interaction_finished.emit()
+
+    def _delete_notes(self, notes):
+        for n in list(notes):
+            self.remove_note(n)
+
+    def _delete_pins(self, pins):
+        for p in list(pins):
+            p.note.remove_pin(p)
+        self.notes_changed.emit()
+
+    def _delete_connections(self, threads):
+        for t in list(threads):
+            self.remove_connection(t)
+        self.notes_changed.emit()
+
+    def _raise_groups(self, groups):
+        """Raise each group in the selection above all others, preserving order.
+
+        Ascending z-order so the topmost of the selection ends up on top.
+        """
+        for g in sorted(groups, key=lambda x: x.zValue()):
+            self.raise_group(g)
+
+    def _send_groups_to_back(self, groups):
+        """Send each group in the selection behind all others, preserving order.
+
+        Descending z-order so the topmost of the selection ends up topmost
+        within the send-to-back group.
+        """
+        for g in sorted(groups, key=lambda x: x.zValue(), reverse=True):
+            self.send_group_to_back(g)
+
+    def _raise_groups_one_step(self, groups):
+        """Raise each selected group one step forward, preserving relative order."""
+        for g in sorted(groups, key=lambda x: x.zValue(), reverse=True):
+            self.raise_group_one_step(g)
+
+    def _send_groups_back_one_step(self, groups):
+        """Send each selected group one step backward, preserving relative order."""
+        for g in sorted(groups, key=lambda x: x.zValue()):
+            self.send_group_back_one_step(g)
+
+    def _remove_groups(self, groups):
+        for g in list(groups):
+            self.remove_group(g)
+        self.notes_changed.emit()
+
+    def _remove_connections_of_pins(self, pins):
+        for p in list(pins):
+            p.remove_connections()
+        self.notes_changed.emit()
+
     # In BoardScene:
     def note_model_changed(self, note):
         """A note's data changed: bump the mentions revision so caches that
         depend on the whole notebook's content are invalidated."""
         self._mentions_revision += 1
         self.note_content_changed.emit(note)
+
+    def top_level_order_list(self):
+        """Order of top-level groups in the Grouped tree view.
+
+        Stored on the scene (like ``_ungrouped_order``) so a drag doesn't need
+        a round-trip through ProjectData.  Persisted via
+        ``ProjectData.group_order``.
+        """
+        if not hasattr(self, "_top_level_order"):
+            self._top_level_order = []
+        return self._top_level_order
 
 
 class BoardView(QGraphicsView):
@@ -1200,6 +1934,9 @@ class BoardView(QGraphicsView):
         self._panning = False
         self._pan_cursor_active = False
         self._last_pos = None
+        self._drag_block = None
+        self._drag_origin = None
+        self._drag_moved = False
         self._pan_filter_installed = False
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setRenderHints(
@@ -1252,10 +1989,9 @@ class BoardView(QGraphicsView):
     def mousePressEvent(self, event):
         """Qt event handler: a mouse button was pressed.
 
-        Middle button → free 2D pan.  No ``grabMouse()`` — see the class
-        docstring for why.  An app-level event filter catches the release
-        wherever it lands, so the cursor never sticks even if the release
-        goes to a note / pin / child widget.
+        Middle button → free 2D pan.  Left button on a selected, movable
+        item → start a *multi-item* drag (all selected notes + groups).
+        Anything else → fall through to Qt's normal item delivery.
         """
         if event.button() == Qt.MouseButton.MiddleButton:
             self._panning = True
@@ -1265,25 +2001,61 @@ class BoardView(QGraphicsView):
             self._pan_watchdog.start()
             event.accept()
             return
+
+        # Left press inside the current selection → multi-item drag.
+        if event.button() == Qt.MouseButton.LeftButton:
+            scene = self.scene()
+            scene_pos = self.mapToScene(event.position().toPoint())
+            item = scene._item_at(scene_pos) if scene is not None else None
+
+            # Only notes and groups start a multi-drag.  Pins inside a
+            # selected note follow the note; pins are single-item drags.
+            if (item is not None
+                    and item.isSelected()
+                    and isinstance(item, (NoteItem, GroupItem))
+                    and not item.model.locked):
+                # A click on a group's resize grip must reach the item so
+                # it can resize — do not intercept it here.
+                in_grip = False
+                if isinstance(item, (NoteItem, GroupItem)):
+                    local = item.mapFromScene(scene_pos)
+                    in_grip = item._in_grip(local)
+                if not in_grip:
+                    block = scene.build_selection_block()
+                    if block:
+                        self._drag_block = block
+                        self._drag_origin = scene_pos
+                        self._drag_moved = False
+                        event.accept()
+                        return
+
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        """Qt event handler: the mouse moved.
-
-        Panning uses the scroll bars, not the transform.  Scroll-bar
-        values are in screen pixels, so the content tracks the cursor
-        1:1 at every zoom.  The scene rect is huge (see
-        ``MainWindow.create_canvas``), so this never clamps.
-        """
+        """Qt event handler: the mouse moved."""
+        # Multi-item selection drag.
+        if self._drag_block is not None:
+            if not (event.buttons() & Qt.MouseButton.LeftButton):
+                self._drag_block = None
+                self._drag_origin = None
+                self._drag_moved = False
+                return
+            scene_pos = self.mapToScene(event.position().toPoint())
+            delta = scene_pos - self._drag_origin
+            if not self._drag_moved:
+                if delta.manhattanLength() < 3:
+                    return
+                self._drag_moved = True
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            self.scene().move_block(self._drag_block, delta)
+            event.accept()
+            return
 
         if self._panning and not (event.buttons() & Qt.MouseButton.MiddleButton):
             self._end_pan()
 
         if self._panning:
-            # Restart the inactivity watchdog: any real movement means
-            # the user is still dragging.
             self._pan_watchdog.start()
-
             pos = event.position().toPoint()
             delta = pos - self._last_pos
             self._last_pos = pos
@@ -1297,6 +2069,18 @@ class BoardView(QGraphicsView):
 
     def mouseReleaseEvent(self, event):
         """Qt event handler: a mouse button was released."""
+        # End multi-item selection drag.
+        if self._drag_block is not None and event.button() == Qt.MouseButton.LeftButton:
+            moved = self._drag_moved
+            self._drag_block = None
+            self._drag_origin = None
+            self._drag_moved = False
+            self.unsetCursor()
+            if moved:
+                self.scene().interaction_finished.emit()
+            event.accept()
+            return
+
         if self._panning and event.button() == Qt.MouseButton.MiddleButton:
             self._end_pan()
             event.accept()
@@ -1304,7 +2088,6 @@ class BoardView(QGraphicsView):
         if self._panning:
             self._end_pan()
         super().mouseReleaseEvent(event)
-
     # -------------------------------------- pan: end + safety nets
 
     def _begin_pan_cursor(self):
@@ -1444,9 +2227,15 @@ class BoardView(QGraphicsView):
         recompute when the view has moved more than 200 scene units — a
         stale count for a fraction of a second is invisible, since the tier
         is a coarse choice.
+
+        Skipped entirely during export: the export uses its own full-fidelity
+        paint path and must not have these values overwritten with the
+        viewport-derived numbers.
         """
         s = self.scene()
-        if s is not None and hasattr(s, "_visible_thread_count"):
+        if (s is not None
+                and hasattr(s, "_visible_thread_count")
+                and not getattr(s, "export_mode", False)):
             rect = self.mapToScene(self.viewport().rect()).boundingRect()
             if not rect.isEmpty():
                 s._view_rect = rect

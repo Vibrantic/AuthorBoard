@@ -77,6 +77,7 @@ from PySide6.QtWidgets import (
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
+    QAbstractItemView,
 )
 
 from models import (
@@ -206,6 +207,170 @@ class _AutosaveWorker(QRunnable):
             # Autosave is best-effort; never crash the worker.
             pass
 
+class _TreeWidget(QTreeWidget):
+    """QTreeWidget that lets MainWindow validate and perform reorder drops.
+
+    InternalMove would reorder items itself, but the tree is a *view* of
+    the underlying models (GroupData.children_order / ProjectData.
+    ungrouped_order).  Letting Qt do the reorder and then rebuilding
+    would race against our rebuild.  Instead we override dropEvent to:
+
+      1. Ask MainWindow whether this drop is allowed.
+      2. If yes, hand the drop to MainWindow, which updates the models
+         and rebuilds the Grouped section.
+      3. Never call super() — the widget itself doesn't touch the tree.
+    """
+
+    def dropEvent(self, event):
+        handler = getattr(self.window(), "handle_tree_drop", None)
+        source = self.currentItem()
+        target = self.itemAt(event.position().toPoint())
+        ok = handler is not None and handler(self.dropIndicatorPosition(), source, target)
+        # Never let Qt "move" (= delete) the source item itself; we rebuild the tree.
+        event.setDropAction(Qt.DropAction.IgnoreAction)
+        event.accept() if ok else event.ignore()
+
+    def keyPressEvent(self, event):
+        key = event.key()
+
+        if key == Qt.Key.Key_Space:
+            item = self.currentItem()
+            if item is not None:
+                handler = getattr(self.window(), "on_tree_item_activated", None)
+                if handler is not None:
+                    handler(item)
+            event.accept()
+            return
+
+        if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            direction = 1 if key == Qt.Key.Key_Down else -1
+            super().keyPressEvent(event)
+
+            item = self.currentItem()
+            window = self.window()
+
+            def is_header(it):
+                if it is None:
+                    return False
+                payload = it.data(0, Qt.ItemDataRole.UserRole)
+                if isinstance(payload, tuple) and len(payload) == 2:
+                    return payload[0] in ("group", "type")
+                return False
+
+            # If Qt collapsed a parent instead of moving, hop past the header.
+            if is_header(item):
+                parent = item.parent()
+                if direction > 0:
+                    # Try the next sibling first (same parent level).
+                    sib = self._next_sibling_after(item)
+                    if sib is None and parent is not None:
+                        # No sibling: hop to the next row after the whole subtree
+                        # of the parent (skip the parent's expanded contents).
+                        sib = self._next_after_subtree(parent)
+                    elif sib is None and parent is None:
+                        # Top-level header with no following sibling: nothing below.
+                        sib = None
+                    # Walk forward to the next note if what we found is a header.
+                    while sib is not None and is_header(sib):
+                        nxt = self._next_after_subtree(sib)
+                        if nxt is None:
+                            break
+                        sib = nxt
+                    if sib is not None:
+                        payload = sib.data(0, Qt.ItemDataRole.UserRole)
+                        if isinstance(payload, str) and payload:
+                            self.setCurrentItem(sib)
+                            item = sib
+                else:
+                    # Going up: previous sibling, or the header above the whole
+                    # subtree of the parent.
+                    sib = self._prev_sibling_before(item)
+                    if sib is None and parent is not None:
+                        sib = parent
+                    elif sib is None and parent is None:
+                        sib = None
+                    while sib is not None and is_header(sib):
+                        prev = self._prev_before_subtree(sib)
+                        if prev is None:
+                            # Parent is itself the header — jump one level up.
+                            sib = sib.parent()
+                            continue
+                        sib = prev
+                    if sib is not None:
+                        payload = sib.data(0, Qt.ItemDataRole.UserRole)
+                        if isinstance(payload, str) and payload:
+                            self.setCurrentItem(sib)
+                            item = sib
+
+            handler = getattr(window, "on_tree_selection_changed", None)
+            if handler is not None and item is not None:
+                handler(item)
+            return
+
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            item = self.currentItem()
+            if item is not None:
+                payload = item.data(0, Qt.ItemDataRole.UserRole)
+                if isinstance(payload, tuple) and len(payload) == 2:
+                    # Group header (Grouped section) or type-group header
+                    # (Alle Notizen) — both toggle expansion.
+                    if payload[0] in ("group", "type"):
+                        item.setExpanded(not item.isExpanded())
+                        event.accept()
+                        return
+                handler = getattr(self.window(), "on_tree_item_double_clicked", None)
+                if handler is not None:
+                    handler(item, 0)
+            event.accept()
+            return
+
+        super().keyPressEvent(event)
+
+    def _next_sibling_after(self, item):
+        """The sibling immediately following ``item`` (None if none)."""
+        parent = item.parent()
+        if parent is None:
+            idx = self.topLevelItemCount()
+            for i in range(idx):
+                if self.topLevelItem(i) is item:
+                    return self.topLevelItem(i + 1) if i + 1 < idx else None
+            return None
+        idx = parent.childCount()
+        for i in range(idx):
+            if parent.child(i) is item:
+                return parent.child(i + 1) if i + 1 < idx else None
+        return None
+
+    def _prev_sibling_before(self, item):
+        """The sibling immediately preceding ``item`` (None if none)."""
+        parent = item.parent()
+        if parent is None:
+            idx = self.topLevelItemCount()
+            for i in range(idx):
+                if self.topLevelItem(i) is item:
+                    return self.topLevelItem(i - 1) if i - 1 >= 0 else None
+            return None
+        idx = parent.childCount()
+        for i in range(idx):
+            if parent.child(i) is item:
+                return parent.child(i - 1) if i - 1 >= 0 else None
+        return None
+
+    def _next_after_subtree(self, item):
+        """The row immediately after ``item``'s whole visible subtree."""
+        last = item
+        while last.isExpanded() and last.childCount() > 0:
+            last = last.child(last.childCount() - 1)
+        sib = self._next_sibling_after(last)
+        return sib
+
+    def _prev_before_subtree(self, item):
+        """The row immediately before ``item``'s header when going up.
+
+        For a header, we want the previous sibling of its parent (i.e. the
+        row *above* the whole subtree this header belongs to)."""
+        return self._prev_sibling_before(item)
+
 
 class MainWindow(QMainWindow):
 
@@ -250,6 +415,13 @@ class MainWindow(QMainWindow):
         # Incremental tree state.
         self._tree_items = {}       # note_id -> (item, revision, parent_key)
         self._tree_groups = {}      # type_key -> group QTreeWidgetItem
+
+        self._grouped_items = {}  # note_id -> QTreeWidgetItem (in the Grouped section)
+        self._group_tree_nodes = {}  # group_id -> QTreeWidgetItem
+        self._section_all = None  # top-level "All Notes" section item
+        self._section_grouped = None  # top-level "Grouped Notes" section item
+
+        self._tree_preferred_section = "all"
 
         self._checkpoint_timer = QTimer(self)
         self._checkpoint_timer.setSingleShot(True)
@@ -414,10 +586,13 @@ class MainWindow(QMainWindow):
         self.count_label.setToolTip(tr("Treffer im aktuellen Filter / alle Notizen"))
         lay.addWidget(self.count_label)
 
-        self.tree = QTreeWidget()
+        self.tree = _TreeWidget()
         self.tree.setToolTip(tr("Klick wählt die Notiz aus und zentriert das Board darauf"))
         self.tree.setHeaderHidden(True)
         self.tree.setIndentation(14)
+        self.tree.setDragDropMode(QTreeWidget.DragDropMode.InternalMove)
+        self.tree.setDragDropOverwriteMode(False)
+        self.tree.setDefaultDropAction(Qt.DropAction.MoveAction)
         lay.addWidget(self.tree, 1)
 
         self.tree_dock = QDockWidget(tr("Notizen"), self)
@@ -459,6 +634,7 @@ class MainWindow(QMainWindow):
         self.type_filter.currentIndexChanged.connect(self.on_filter_changed)
         self.tag_filter.currentIndexChanged.connect(self.on_filter_changed)
         self.status_filter.currentIndexChanged.connect(self.on_filter_changed)
+        self.tree.itemDoubleClicked.connect(self.on_tree_item_double_clicked)
 
     def _action(self, text, shortcut, slot):
         """Create a QAction with optional shortcut."""
@@ -800,7 +976,7 @@ class MainWindow(QMainWindow):
 
         self._restoring = True
         try:
-            # --- notes: unchanged (already incremental) ---
+            # --- notes ---
             for nid in list(changed):
                 item = self.scene.note_lookup.get(nid)
                 if item is not None:
@@ -824,8 +1000,6 @@ class MainWindow(QMainWindow):
                 cd["id"]: cd
                 for cd in (json.loads(state.connections) if state.connections else [])
             }
-            # Drop connections that no longer exist (or whose endpoints changed —
-            # we cannot re-route an existing QGraphicsPathItem to different pins).
             to_remove = []
             for conn in self.scene.connection_items:
                 w = wanted.get(conn.model.id)
@@ -836,7 +1010,6 @@ class MainWindow(QMainWindow):
                         or w["end_pin_id"] != conn.model.end_pin_id):
                     to_remove.append(conn)
                     continue
-                # Colour / label only → update in place, no scene churn.
                 if conn.model.color != w.get("color", ""):
                     conn.model.color = w.get("color", "")
                     conn.update()
@@ -862,10 +1035,15 @@ class MainWindow(QMainWindow):
                         color=cd.get("color", ""), label=cd.get("label", ""),
                     ), start, end)
 
-            # --- groups: unchanged (already cheap) ---
+            # --- groups ---
             self.scene.clear_groups()
-            for gd in json.loads(state.meta).get("groups", []):
+            meta = json.loads(state.meta)
+            for gd in meta.get("groups", []):
                 self.scene.add_group_item(Storage.group_from_dict(gd))
+
+            # --- scene-level order lists ---
+            self.scene.ungrouped_order_list()[:] = list(meta.get("ungrouped_order", []))
+            self.scene.top_level_order_list()[:] = list(meta.get("group_order", []))
 
             self.scene.clearSelection()
             for note_id in selected:
@@ -1207,9 +1385,10 @@ class MainWindow(QMainWindow):
             copy.setSelected(True)
 
     def group_selected(self):
-        """Ctrl+G: frame the selected notes with a group."""
+        """Ctrl+G: frame the selected notes and/or groups with a new group."""
         if self.scene.create_group_from_selection() is None:
-            self.statusBar().showMessage(tr("Keine Notiz ausgewählt."), 3000)
+            self.statusBar().showMessage(
+                tr("Keine Notiz oder Gruppe ausgewählt."), 3000)
 
     def open_editor(self, note=None, focus_comment=None):
         """Open the full-size editor for ``note`` (default: the inspected note).
@@ -1294,14 +1473,29 @@ class MainWindow(QMainWindow):
             self.inspector.set_known_tags(sorted(self.known_tags))
 
     def toggle_lock_selected(self):
-        """Ctrl+L: lock the selected notes (or unlock them if all are locked)."""
-        notes = self.selected_notes()
-        if not notes:
+        """Ctrl+L: lock every lockable item in the selection, or unlock them all.
+
+        Lockable kinds: notes, pins, group frames.  Threads are not lockable.
+        Rules:
+          * Nothing lockable selected → status-bar hint, no-op.
+          * At least one item unlocked → lock *all*.
+          * All items already locked → unlock *all*.
+        """
+        notes = self.scene.selected_notes()
+        pins = self.scene.selected_pins()
+        groups = self.scene.selected_groups()
+
+        total = len(notes) + len(pins) + len(groups)
+        if total == 0:
             self.statusBar().showMessage(tr("Keine Notiz ausgewählt."), 3000)
             return
-        target = not all(n.model.locked for n in notes)
-        for n in notes:
-            self.scene.set_note_locked(n, target)
+
+        everything_locked = all(
+            getattr(x.model, "locked", False)
+            for x in (*notes, *pins, *groups)
+        )
+        target = not everything_locked
+        self.scene.set_lock_for_selection(target)
 
     def set_focus_mode(self, on):
         """View menu: toggle focus mode and remember the choice."""
@@ -1367,6 +1561,24 @@ class MainWindow(QMainWindow):
         note.setSelected(True)
         self.view.centerOn(note)
 
+    def jump_to_group(self, group):
+        """Select a group in the scene, centre the board on it, and give it focus.
+
+        This matches what a click on a note does: the group is selected (so its
+        accent border shows), the view centres on the group's full rect, and
+        the inspector/comments panel update via the normal selection path.
+        """
+        if group is None or group.scene() is not self.scene:
+            return
+
+        self.scene.clearSelection()
+        group.setSelected(True)
+        rect = group.scene_rect()
+        # Add a margin so the frame is comfortably visible, not flush to the edge.
+        margin = 40
+        target = rect.adjusted(-margin, -margin, margin, margin)
+        self.view.fitInView(target, Qt.AspectRatioMode.KeepAspectRatio)
+
     def focus_note_from_comment(self, note):
         """Single-click in the Comments panel: select the note and centre the
         board on it.  The inspector updates automatically because the
@@ -1413,7 +1625,6 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(tr("Exportiert: {path}", path=filename), 5000)
 
     def export_png(self):
-
         """File -> Export -> Board as image."""
         rect = self.scene.content_rect()
 
@@ -1448,11 +1659,24 @@ class MainWindow(QMainWindow):
         self.scene.blockSignals(True)
         self.scene.clearSelection()
 
-        painter = QPainter(image)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
-        self.scene.render(painter, QRectF(image.rect()), rect)
-        painter.end()
+        self.scene.export_mode = True
+        try:
+            painter = QPainter(image)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+
+            # WICHTIG: Manuelle Transformation statt scene.render()
+            # Dadurch wird sichergestellt, dass die Strichstärken (die in
+            # Szenen-Einheiten definiert sind) korrekt mitskaliert werden.
+            painter.scale(scale, scale)
+            painter.translate(-rect.x(), -rect.y())
+
+            # Zeichnet die Szene ohne die interne Render-Methode zu nutzen,
+            # die bei extremen Skalierungen Fehler macht.
+            self.scene.render(painter, QRectF(rect), rect, Qt.AspectRatioMode.IgnoreAspectRatio)
+            painter.end()
+        finally:
+            self.scene.export_mode = False
 
         for item in selected:
             item.setSelected(True)
@@ -1556,13 +1780,17 @@ class MainWindow(QMainWindow):
         self.tag_filter.blockSignals(False)
 
     def refresh_tree(self):
-        """Rebuild the left tree incrementally.
+        """Rebuild the left tree.
 
-        The tree is only rebuilt from scratch when the filter widgets change
-        (``on_filter_changed``); every other update re-uses the existing
-        ``QTreeWidgetItem`` per note and only adds/removes/updates the ones
-        whose ``NoteData._revision`` changed.  Group items are kept across
-        refreshes, so the tree keeps scroll position and expansion state.
+        The tree has two top-level sections:
+
+        *   **All Notes** - every note grouped by its note type.  Updated
+            incrementally: existing items are reused, only changed/added/removed
+            notes touch the widget.
+        *   **Grouped Notes** - the same notes, but organised by board
+            geometry: top-level groups first, then their nested groups, then
+            the notes that live in them (see ``BoardScene.group_chain_for_note``).
+            Rebuilt from scratch on every refresh (cheap: tens of groups).
         """
         # --- 1. Which notes match the current filter? ---
         matching = {}
@@ -1570,7 +1798,12 @@ class MainWindow(QMainWindow):
             if self.scene.note_matches(note):
                 matching[note.model.id] = note
 
-        # --- 2. Remove items for notes that are gone or no longer match ---
+        self._ensure_tree_sections()
+
+        # =====================================================================
+        # SECTION A: "All Notes" (by note type) - incremental
+        # =====================================================================
+
         for nid in list(self._tree_items):
             item, _rev, _pkey = self._tree_items[nid]
             if nid not in matching:
@@ -1579,36 +1812,31 @@ class MainWindow(QMainWindow):
                     parent.removeChild(item)
                 del self._tree_items[nid]
 
-        # --- 3. Add / update items for matching notes ---
-        groups = {}   # type_key -> group item
+        groups = {}
         new_items = {}
 
         for nid, note in matching.items():
             key = note.model.note_type
 
-            # Create or fetch the group item for this type.
             group = groups.get(key) or self._tree_groups.get(key)
             if group is None:
                 info = self.note_types.get(key)
                 group = QTreeWidgetItem([info.label if info else key])
                 group.setIcon(0, color_icon(info.color if info else "#888888"))
-                group.setFlags(group.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-                self.tree.addTopLevelItem(group)
+                group.setData(0, Qt.ItemDataRole.UserRole, ("type", key))
+                self._section_all.addChild(group)
             groups[key] = group
 
             old = self._tree_items.get(nid)
             rev = note.model._revision
 
             if old is not None and old[1] == rev and old[2] == key:
-                # Unchanged: reuse the item as-is.
                 new_items[nid] = old
                 continue
 
             if old is not None:
-                # Item exists but the note (or its group) changed: update in place.
                 item = old[0]
                 if old[2] != key:
-                    # Type changed: move to a different parent.
                     old_parent = item.parent()
                     if old_parent is not None:
                         old_parent.removeChild(item)
@@ -1617,7 +1845,6 @@ class MainWindow(QMainWindow):
                 item = QTreeWidgetItem([""])
                 group.addChild(item)
 
-            # Update text + icon + tooltip from the note.
             item.setText(0, note.model.title or tr("Ohne Titel"))
             st = STATUS_INFO.get(note.model.status)
             if st:
@@ -1632,16 +1859,16 @@ class MainWindow(QMainWindow):
 
             new_items[nid] = (item, rev, key)
 
-        # Drop empty groups (all their notes were filtered out).
+        # Drop empty type groups.
         for key in list(self._tree_groups):
             group = self._tree_groups[key]
             if group.childCount() == 0 and key not in groups:
-                idx = self.tree.indexOfTopLevelItem(group)
+                idx = self._section_all.indexOfChild(group)
                 if idx >= 0:
-                    self.tree.takeTopLevelItem(idx)
+                    self._section_all.takeChild(idx)
                 del self._tree_groups[key]
 
-        # Reorder top-level groups to match note_types order.
+        # Reorder type groups inside "All Notes".
         order = list(self.note_types.keys()) + [
             k for k in groups if k not in self.note_types
         ]
@@ -1649,13 +1876,13 @@ class MainWindow(QMainWindow):
             group = groups.get(key) or self._tree_groups.get(key)
             if group is None:
                 continue
-            current = self.tree.indexOfTopLevelItem(group)
+            current = self._section_all.indexOfChild(group)
             if current != i:
-                self.tree.takeTopLevelItem(current)
-                self.tree.insertTopLevelItem(i, group)
+                self._section_all.takeChild(current)
+                self._section_all.insertChild(i, group)
             self._tree_groups[key] = group
 
-        # Update group labels with counts.
+        # Update count labels.
         for key, group in self._tree_groups.items():
             info = self.note_types.get(key)
             label = info.label if info else key
@@ -1663,8 +1890,16 @@ class MainWindow(QMainWindow):
 
         self._tree_items = new_items
 
-        # Signals blocked during the update; new selection gets set by
-        # the caller (on_note_selected / select_in_tree).
+        # =====================================================================
+        # SECTION B: "Grouped Notes" (by geometry) - full rebuild
+        # =====================================================================
+
+        self._rebuild_grouped_section(matching)
+
+        # =====================================================================
+        # Common tail: selection / counter
+        # =====================================================================
+
         keep = self.inspector.note.model.id if self.inspector.note else None
         if keep:
             self.select_in_tree(keep)
@@ -1673,22 +1908,321 @@ class MainWindow(QMainWindow):
         shown = len(new_items)
         self.count_label.setText(tr("{shown} von {total} Notizen", shown=shown, total=total))
 
-    def select_in_tree(self, note_id):
+    def _ensure_tree_sections(self):
+        """Create the two top-level section items on first use, refresh their
+        labels on every call (so language switches take effect)."""
+        if self._section_all is None:
+            self._section_all = QTreeWidgetItem([tr("Alle Notizen")])
+            font = self._section_all.font(0)
+            font.setBold(True)
+            self._section_all.setFont(0, font)
+            self.tree.addTopLevelItem(self._section_all)
 
-        """Highlight a note in the tree."""
-        for i in range(self.tree.topLevelItemCount()):
-            group = self.tree.topLevelItem(i)
-            for j in range(group.childCount()):
-                child = group.child(j)
-                if child.data(0, Qt.ItemDataRole.UserRole) == note_id:
-                    self.tree.blockSignals(True)
-                    self.tree.setCurrentItem(child)
-                    self.tree.blockSignals(False)
+        if self._section_grouped is None:
+            self._section_grouped = QTreeWidgetItem([tr("Notizen in Gruppen")])
+            font = self._section_grouped.font(0)
+            font.setBold(True)
+            self._section_grouped.setFont(0, font)
+            self.tree.addTopLevelItem(self._section_grouped)
+
+        self._section_all.setText(0, tr("Alle Notizen"))
+        self._section_grouped.setText(0, tr("Notizen in Gruppen"))
+
+        # Keep section order stable (All first, Grouped second).
+        for i, section in enumerate((self._section_all, self._section_grouped)):
+            current = self.tree.indexOfTopLevelItem(section)
+            if current != i:
+                self.tree.takeTopLevelItem(current)
+                self.tree.insertTopLevelItem(i, section)
+
+        # Expand both sections by default on first use.
+        self._section_all.setExpanded(True)
+        self._section_grouped.setExpanded(True)
+
+    def _rebuild_grouped_section(self, matching):
+        """Fill the "Grouped Notes" section from the current board geometry.
+
+        Three ordering layers, most specific first:
+
+        *   **Top-level groups** are ordered by ``scene.top_level_order_list()``.
+        *   **Nested groups and notes inside a group** are ordered by that
+            group's ``model.children_order``.
+        *   **Ungrouped notes** are ordered by ``scene.ungrouped_order_list()``.
+
+        Anything not yet present in its corresponding list falls back to the
+        geometric sort (groups by top-left, notes by title).  This makes drag
+        reorders stick, while new items appear in a sensible place the first
+        time they show up in the section.
+        """
+
+        expanded_gids = {
+            gid for gid, item in self._group_tree_nodes.items()
+            if item.isExpanded()
+        }
+
+        self._section_grouped.takeChildren()
+        self._grouped_items.clear()
+        self._group_tree_nodes.clear()
+
+        # =========================================================
+        # 1. Bucket notes by their full chain of groups.
+        # =========================================================
+        by_chain = {}
+        ungrouped = []
+        for nid, note in matching.items():
+            chain = self.scene.group_chain_for_note(note)
+            if not chain:
+                ungrouped.append(note)
+                continue
+            by_chain.setdefault(tuple(g.model.id for g in chain), []).append(note)
+
+        if not by_chain:
+            self._section_grouped.setHidden(True)
+            return
+        self._section_grouped.setHidden(False)
+
+        # =========================================================
+        # 2. Group tree node factory (memoised per group id).
+        # =========================================================
+        def group_item(group):
+            if group.model.id in self._group_tree_nodes:
+                return self._group_tree_nodes[group.model.id]
+            info_color = QColor(group.model.color)
+            item = QTreeWidgetItem([group.model.title or tr("Gruppe")])
+            item.setIcon(
+                0,
+                color_icon(info_color.name() if info_color.isValid() else "#4da6ff"),
+            )
+            item.setData(0, Qt.ItemDataRole.UserRole, ("group", group.model.id))
+            font = item.font(0)
+            font.setBold(True)
+            item.setFont(0, font)
+            self._group_tree_nodes[group.model.id] = item
+            return item
+
+        # =========================================================
+        # 3. Indexes:
+        #    * children_by_parent: parent gid (None = top level) -> child gids
+        #    * direct_notes_by_gid: gid -> notes whose *innermost* group is gid
+        #      (the last element of the chain).  Keyed by the innermost group,
+        #      NOT the outermost, so notes of nested groups are not attached
+        #      to their ancestors.
+        # =========================================================
+        children_by_parent = {}
+        direct_notes_by_gid = {}
+        for chain_ids, chain_notes in by_chain.items():
+            for i, gid in enumerate(chain_ids):
+                parent_gid = chain_ids[i - 1] if i > 0 else None
+                children_by_parent.setdefault(parent_gid, set()).add(gid)
+            direct_notes_by_gid.setdefault(chain_ids[-1], []).extend(chain_notes)
+
+        # =========================================================
+        # 4. Geometric sort keys — fallback only.
+        # =========================================================
+        def group_geom_key(gid):
+            group = self.scene.group_lookup.get(gid)
+            if group is None:
+                return (0.0, 0.0, "")
+            r = group.scene_rect()
+            return (r.top(), r.left(), (group.model.title or "").lower())
+
+        def note_geom_key(note):
+            return (note.model.title or "").lower()
+
+        # =========================================================
+        # 5. Ordered children / notes — manual list FIRST, geometric
+        #    fallback for anything not yet present in the manual list.
+        # =========================================================
+        def ordered_children(parent_gid):
+            """Gids that are immediate children of ``parent_gid``
+            (``None`` = top level), in display order."""
+            seen = set(children_by_parent.get(parent_gid, ()))
+            if parent_gid is None:
+                manual = self.scene.top_level_order_list()
+            else:
+                group = self.scene.group_lookup.get(parent_gid)
+                manual = group.model.children_order if group else []
+
+            ordered = [cid for cid in manual if cid in seen]
+            leftover = sorted(seen - set(ordered), key=group_geom_key)
+            return ordered + leftover
+
+        def ordered_notes(parent_gid, notes):
+            """Notes directly inside ``parent_gid`` in display order."""
+            if parent_gid is None:
+                manual = self.scene.ungrouped_order_list()
+            else:
+                group = self.scene.group_lookup.get(parent_gid)
+                manual = group.model.children_order if group else []
+
+            by_id = {n.model.id: n for n in notes}
+            manual_set = set(manual)
+            ordered = [by_id[i] for i in manual if i in by_id]
+            leftover = sorted(
+                (n for n in notes if n.model.id not in manual_set),
+                key=note_geom_key,
+            )
+            return ordered + leftover
+
+        def make_note_item(note):
+            child = QTreeWidgetItem([note.model.title or tr("Ohne Titel")])
+            st = STATUS_INFO.get(note.model.status)
+            if st:
+                child.setIcon(0, color_icon(st[1], 10))
+            child.setData(0, Qt.ItemDataRole.UserRole, note.model.id)
+            self._grouped_items[note.model.id] = child
+            return child
+
+        # =========================================================
+        # 6. Recursive tree builder — the ONLY place that attaches
+        #    groups and notes to the widget.
+        # =========================================================
+        def build_children(parent_item, parent_gid):
+            # Direct notes of this container.
+            direct_notes = (
+                ungrouped if parent_gid is None
+                else direct_notes_by_gid.get(parent_gid, [])
+            )
+            direct_note_by_id = {n.model.id: n for n in direct_notes}
+
+            # Direct sub-groups of this container.
+            child_group_ids = children_by_parent.get(parent_gid, set())
+
+            # Manual list for this container.
+            if parent_gid is None:
+                manual = self.scene.top_level_order_list()
+            else:
+                group = self.scene.group_lookup.get(parent_gid)
+                manual = group.model.children_order if group else []
+
+            # Ids we've already emitted at this level (groups or notes).
+            emitted = set()
+
+            def emit_group(gid):
+                if gid in emitted:
                     return
+                group = self.scene.group_lookup.get(gid)
+                if group is None:
+                    return
+                emitted.add(gid)
+                node = group_item(group)
+                if node.parent() is None:
+                    parent_item.addChild(node)
+                # Recurse: this group emits its own children (notes + subgroups).
+                build_children(node, gid)
 
+            def emit_note(nid):
+                if nid in emitted:
+                    return
+                note = direct_note_by_id.get(nid)
+                if note is None:
+                    return
+                emitted.add(nid)
+                parent_item.addChild(make_note_item(note))
+
+            # (a) Walk the manual list in order, dispatching by kind.
+            for entry in manual:
+                if entry in child_group_ids:
+                    emit_group(entry)
+                elif entry in direct_note_by_id:
+                    emit_note(entry)
+                # Entries that belong elsewhere (stale ids) are ignored.
+
+            # (b) Leftover sub-groups not yet emitted (geometric).
+            for cid in sorted(child_group_ids - emitted, key=group_geom_key):
+                emit_group(cid)
+
+            # (c) Leftover notes not yet emitted (by title).
+            for note in sorted(
+                (n for n in direct_notes if n.model.id not in emitted),
+                key=note_geom_key,
+            ):
+                emit_note(note.model.id)
+
+        build_children(self._section_grouped, None)
+
+        # =========================================================
+        # 7. Update group header counts (notes only, not sub-groups).
+        # =========================================================
+        for gid, item in self._group_tree_nodes.items():
+            group = self.scene.group_lookup.get(gid)
+            if group is None:
+                continue
+            n_notes = sum(
+                1 for c in range(item.childCount())
+                if isinstance(item.child(c).data(0, Qt.ItemDataRole.UserRole), str)
+            )
+            title = group.model.title or tr("Gruppe")
+            item.setText(0, f"{title}  ({n_notes})")
+
+        # =========================================================
+        # 8. "Ohne Gruppe" bucket at the bottom.
+        # =========================================================
+        if ungrouped:
+            loose = QTreeWidgetItem([tr("Ohne Gruppe")])
+            italic = loose.font(0)
+            italic.setItalic(True)
+            loose.setFont(0, italic)
+
+            for note in ordered_notes(None, ungrouped):
+                loose.addChild(make_note_item(note))
+            self._section_grouped.addChild(loose)
+
+        for gid, item in self._group_tree_nodes.items():
+            item.setExpanded(gid in expanded_gids)
+
+    def select_in_tree(self, note_id):
+        """Highlight a note in the tree.
+
+        A note can appear in both sections (All Notes and Grouped Notes).  We
+        highlight exactly one copy, choosing the section the user last clicked
+        in, so:
+
+          * clicking a note in the Grouped section keeps the highlight there,
+          * clicking a note in the All Notes section (or selecting it via the
+            board, the inspector, a comment, …) highlights the All Notes copy.
+        """
         self.tree.blockSignals(True)
-        self.tree.setCurrentItem(None)
-        self.tree.blockSignals(False)
+        try:
+            # Build the ordered list of candidates for this note.
+            candidates = {
+                "all": None,
+                "grouped": None,
+            }
+
+            # Section A: type groups under _section_all.
+            for i in range(self._section_all.childCount()):
+                group = self._section_all.child(i)
+                for j in range(group.childCount()):
+                    child = group.child(j)
+                    if child.data(0, Qt.ItemDataRole.UserRole) == note_id:
+                        candidates["all"] = child
+                        break
+                if candidates["all"] is not None:
+                    break
+
+            # Section B: flat map into the Grouped section.
+            candidates["grouped"] = self._grouped_items.get(note_id)
+
+            # Prefer the section the user last clicked in; fall back to the
+            # other one if this note isn't present there.
+            order = (
+                ("grouped", "all")
+                if self._tree_preferred_section == "grouped"
+                else ("all", "grouped")
+            )
+
+            chosen = next(
+                (candidates[s] for s in order if candidates[s] is not None),
+                None,
+            )
+
+            if chosen is not None:
+                self.tree.setCurrentItem(chosen)
+            else:
+                self.tree.setCurrentItem(None)
+        finally:
+            self.tree.blockSignals(False)
 
     def on_note_selected(self, note):
 
@@ -1704,17 +2238,231 @@ class MainWindow(QMainWindow):
             self.tree.blockSignals(False)
 
     def on_tree_item_clicked(self, item, column):
+        """Tree click: select the note or group and centre the board on it."""
+        payload = item.data(0, Qt.ItemDataRole.UserRole)
 
-        """Tree click: select the note and centre the board on it."""
-        note_id = item.data(0, Qt.ItemDataRole.UserRole)
-        note = self.scene.note_lookup.get(note_id)
+        # Remember which section the user just acted in, so subsequent
+        # select_in_tree() calls keep the highlight in the same section.
+        self._tree_preferred_section = self._section_of(item)
 
-        if not note:
+        if (isinstance(payload, tuple) and len(payload) == 2
+                and payload[0] == "type"):
+            item.setExpanded(not item.isExpanded())
             return
 
-        self.scene.clearSelection()
-        note.setSelected(True)
-        self.view.centerOn(note)
+        if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "group":
+            group = self.scene.group_lookup.get(payload[1])
+            if group is not None:
+                self.jump_to_group(group)
+            return
+
+        if isinstance(payload, str) and payload:
+            note = self.scene.note_lookup.get(payload)
+            if note is not None:
+                self.scene.clearSelection()
+                note.setSelected(True)
+                self.view.centerOn(note)
+
+    def on_tree_item_activated(self, item):
+        """Space in the tree: act on the current item like a click.
+
+        * Group header (Grouped Notes)  → select the frame, fit the view to it.
+        * Type-group header ("Alle Notizen") → toggle expansion.
+        * Note                           → select it on the board, centre the view.
+
+        Unlike ``on_tree_selection_changed`` (which arrows call and which does
+        NOT scroll), Space is an explicit "take me there" gesture, so it matches
+        the click behaviour: the view follows.
+        """
+        payload = item.data(0, Qt.ItemDataRole.UserRole)
+
+        # Type-group header: no board target — just toggle.
+        if (isinstance(payload, tuple) and len(payload) == 2
+                and payload[0] == "type"):
+            item.setExpanded(not item.isExpanded())
+            return
+
+        # Group header: select and jump to the frame.
+        if (isinstance(payload, tuple) and len(payload) == 2
+                and payload[0] == "group"):
+            group = self.scene.group_lookup.get(payload[1])
+            if group is not None:
+                self.jump_to_group(group)
+            return
+
+        # Note: select and centre.
+        if isinstance(payload, str) and payload:
+            note = self.scene.note_lookup.get(payload)
+            if note is not None:
+                self.scene.clearSelection()
+                note.setSelected(True)
+                self.view.centerOn(note)
+
+    def on_tree_selection_changed(self, item):
+        payload = item.data(0, Qt.ItemDataRole.UserRole)
+
+        if isinstance(payload, str) and payload:
+            note = self.scene.note_lookup.get(payload)
+            if note is None:
+                return
+            self.scene.blockSignals(True)
+            try:
+                self.scene.clearSelection()
+                note.setSelected(True)
+            finally:
+                self.scene.blockSignals(False)
+            self.inspector.set_note(note)
+            self.act_flow.setEnabled(not self.on_shelf())
+            return
+
+        if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "group":
+            group = self.scene.group_lookup.get(payload[1])
+            self.scene.blockSignals(True)
+            try:
+                self.scene.clearSelection()
+                if group is not None:
+                    group.setSelected(True)
+            finally:
+                self.scene.blockSignals(False)
+            self.inspector.set_note(None)
+            self.act_flow.setEnabled(False)
+            return
+
+        # Section headers and the "Ohne Gruppe" bucket: clear the scene.
+        self.scene.blockSignals(True)
+        try:
+            self.scene.clearSelection()
+        finally:
+            self.scene.blockSignals(False)
+        self.inspector.set_note(None)
+        self.act_flow.setEnabled(False)
+
+    def _payload_id(self, item):
+        p = item.data(0, Qt.ItemDataRole.UserRole)
+        if isinstance(p, str) and p:
+            return p
+        if isinstance(p, tuple) and len(p) == 2 and p[0] == "group":
+            return p[1]
+        return None
+
+    def _current_order_for_item(self, item):
+        parent = item.parent()
+        if parent is self._section_grouped:
+            return self.scene.top_level_order_list()
+        if self._is_ungrouped_bucket(parent):
+            return self.scene.ungrouped_order_list()  # was: throwaway []
+        payload = parent.data(0, Qt.ItemDataRole.UserRole)
+        if isinstance(payload, tuple) and payload[0] == "group":
+            return self._order_list_for_group(payload[1])
+        return []
+
+    def _sync_order_from_tree(self, parent_item, order):
+        """Make the stored order match what is currently displayed."""
+        ids = [i for i in (self._payload_id(parent_item.child(k))
+                           for k in range(parent_item.childCount())) if i]
+        # keep ids of notes hidden by a filter
+        order[:] = ids + [i for i in order if i not in ids]
+
+    def handle_tree_drop(self, indicator_position, drag_source, drop_item):
+        DIP = QAbstractItemView.DropIndicatorPosition
+        if drag_source is None or drop_item is None or drag_source is drop_item:
+            return False
+        if self._section_of(drag_source) != "grouped":
+            return False
+        if indicator_position not in (DIP.AboveItem, DIP.BelowItem):
+            return False
+        parent = drag_source.parent()
+        if parent is None or parent is not drop_item.parent():  # siblings only
+            return False
+        src_id, dst_id = self._payload_id(drag_source), self._payload_id(drop_item)
+        if not src_id or not dst_id:
+            return False
+
+        order = self._current_order_for_item(drag_source)
+        self._sync_order_from_tree(parent, order)
+        order.remove(src_id)
+        idx = order.index(dst_id) + (1 if indicator_position == DIP.BelowItem else 0)
+        order.insert(idx, src_id)
+
+        self.schedule_refresh()
+        self.schedule_checkpoint()
+        return True
+
+    def _payload_kind(self, payload):
+        """Return "note", "group", "type" or None based on a tree item payload."""
+        if isinstance(payload, str) and payload:
+            return "note"
+        if isinstance(payload, tuple) and len(payload) == 2:
+            if payload[0] == "group":
+                return "group"
+            if payload[0] == "type":
+                return "type"
+        return None
+
+    def _is_ungrouped_bucket(self, item):
+        """True if ``item`` is the "Ohne Gruppe" bucket in the Grouped section."""
+        payload = item.data(0, Qt.ItemDataRole.UserRole)
+        if payload is not None:
+            return False
+        parent = item.parent()
+        return parent is self._section_grouped
+
+    def _order_list_for_group(self, group_id):
+        """Return the live children_order list of a group (creating it if needed)."""
+        group = self.scene.group_lookup.get(group_id)
+        if group is None:
+            return []
+        return group.model.children_order
+
+    def _current_order_for_item(self, item):
+        """The order list (of ids) of the container ``item`` lives in.
+
+        - Top-level group in the Grouped section  → scene.top_level_order_list()
+        - Nested group                            → its parent group's children_order
+        - Note at the top level (Ohne Gruppe)     → scene.ungrouped_order_list()
+        - Note inside a group                     → that group's children_order
+        """
+        parent = item.parent()
+        if parent is self._section_grouped:
+            payload = item.data(0, Qt.ItemDataRole.UserRole)
+            if isinstance(payload, tuple) and payload[0] == "group":
+                return self.scene.top_level_order_list()
+            return self.scene.ungrouped_order_list()
+        payload = parent.data(0, Qt.ItemDataRole.UserRole)
+        if isinstance(payload, tuple) and payload[0] == "group":
+            return self._order_list_for_group(payload[1])
+        return []
+
+    def _section_of(self, item):
+        """Return "all" or "grouped" depending on which section ``item`` lives in."""
+        parent = item
+        while parent is not None:
+            if parent is self._section_grouped:
+                return "grouped"
+            if parent is self._section_all:
+                return "all"
+            parent = parent.parent()
+        return "all"
+
+    def on_tree_item_double_clicked(self, item, column):
+        """Double-click a header to toggle it; notes open the big editor."""
+        payload = item.data(0, Qt.ItemDataRole.UserRole)
+
+        if (isinstance(payload, tuple) and len(payload) == 2
+                and payload[0] == "type"):
+            item.setExpanded(not item.isExpanded())
+            return
+
+        if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "group":
+            group = self.scene.group_lookup.get(payload[1])
+            if group is not None:
+                self.scene.rename_group(group)
+            return
+
+        if isinstance(payload, str) and payload:
+            note = self.scene.note_lookup.get(payload)
+            if note is not None:
+                self.open_editor(note)
 
     def confirm_delete_note(self, note):
 
@@ -1791,6 +2539,8 @@ class MainWindow(QMainWindow):
 
         self.reset_types([])
         self.scene.reset()
+        self._grouped_items.clear()
+        self._group_tree_nodes.clear()
         self.attachments.replace_all({})
         self.known_tags = set()
         self.current_book = None
@@ -1854,6 +2604,8 @@ class MainWindow(QMainWindow):
         else:
             self.reset_types([])
             self.scene.reset()
+            self._grouped_items.clear()
+            self._group_tree_nodes.clear()
             self.attachments.replace_all({})
             self.known_tags = set()
             self.current_file = path
@@ -2136,6 +2888,9 @@ class MainWindow(QMainWindow):
             project.blobs = self.attachments.subset(
                 AttachmentStore.referenced_ids(project.notes))
 
+        project.ungrouped_order = list(self.scene.ungrouped_order_list())
+        project.group_order = list(self.scene.top_level_order_list())
+
         return project
 
     def save_project(self):
@@ -2305,6 +3060,8 @@ class MainWindow(QMainWindow):
 
         self._tree_items.clear()
         self._tree_groups.clear()
+        self._grouped_items.clear()
+        self._group_tree_nodes.clear()
 
         self.scene.reset()
 
@@ -2341,6 +3098,9 @@ class MainWindow(QMainWindow):
             self.timeline._fitted = False
             self.refresh_timeline()
             self.view.fit_all()
+
+        self.scene.ungrouped_order_list()[:] = list(project.ungrouped_order)
+        self.scene.top_level_order_list()[:] = list(project.group_order)
 
         self.scene.structure_changed.emit()
 

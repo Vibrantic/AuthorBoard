@@ -79,7 +79,7 @@ class GroupItem(QGraphicsRectItem):
         return pos.x() > r.width() - GRIP and pos.y() > r.height() - GRIP
 
     def itemChange(self, change, value):
-        """Qt: keep the model position in sync."""
+        """Qt: keep the model position in sync and refresh badges."""
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
             p = self.pos()
             self.model.x, self.model.y = p.x(), p.y()
@@ -147,10 +147,16 @@ class GroupItem(QGraphicsRectItem):
         event.accept()
 
     def mouseReleaseEvent(self, event):
-        """Qt: end the drag."""
+        """Qt: end the drag and refresh ordering badges on all groups."""
+        was_moving = self._mode is not None
         self._mode = None
         self._block = []
         super().mouseReleaseEvent(event)
+        if was_moving:
+            scene = self.scene()
+            if scene is not None:
+                for g in scene.group_lookup.values():
+                    g.update()
 
     def mouseDoubleClickEvent(self, event):
         """Qt: double-click renames."""
@@ -163,6 +169,8 @@ class GroupItem(QGraphicsRectItem):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
+    # ---------- painting ----------
 
     # ---------- painting ----------
 
@@ -215,3 +223,44 @@ class GroupItem(QGraphicsRectItem):
             x, y = r.right() - 6, r.bottom() - 6
             painter.drawLine(QPointF(x - 10, y), QPointF(x, y - 10))
             painter.drawLine(QPointF(x - 5, y), QPointF(x, y - 5))
+
+        # NEW: ordering index badge for nested groups
+        if lod >= 0.15:
+            self._paint_index_badge(painter, lod)
+
+    def _paint_index_badge(self, painter, lod):
+        """Draw the ordering index (e.g. ``1.2.3``) of a nested group
+        in the bottom-left corner.
+
+        Top-level groups get no badge — they have no parent to be ordered
+        against. The path is computed live from the scene's geometry, so
+        moving a group updates the number on the next paint.
+        """
+        scene = self.scene()
+        if scene is None or not hasattr(scene, "_group_index_path"):
+            return
+        path = scene._group_index_path(self)
+        if not path:
+            return
+
+        font = QFont()
+        font.setPointSizeF(8.5)
+        font.setBold(True)
+        painter.setFont(font)
+        fm = QFontMetrics(font)
+        text = ".".join(str(p) for p in path)
+        tw = fm.horizontalAdvance(text) + 12
+        th = 18
+
+        r = self.rect()
+        # Bottom-left corner, inside the border
+        rect = QRectF(r.left() + 6, r.bottom() - th - 6, tw, th)
+
+        bg = QColor(0, 0, 0, 140)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(bg)
+        painter.drawRoundedRect(rect, 5, 5)
+
+        painter.setPen(QColor("#e6e6ea"))
+        painter.drawText(rect, text,
+                         QTextOption(Qt.AlignmentFlag.AlignCenter))

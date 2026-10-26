@@ -60,6 +60,8 @@ class Storage:
                 for t in project.custom_types
             ],
             "known_tags": list(project.known_tags),
+            "ungrouped_order": list(project.ungrouped_order),
+            "group_order": list(project.group_order),
             "notes": [],
             "connections": [],
         }
@@ -207,6 +209,9 @@ class Storage:
             ))
 
         project.groups = [Storage.group_from_dict(g) for g in data.get("groups", [])]
+        project.known_tags = list(data.get("known_tags", []))
+        project.ungrouped_order = list(data.get("ungrouped_order", []))
+        project.group_order = list(data.get("group_order", []))
 
         return project
 
@@ -302,7 +307,9 @@ class Storage:
                 for t in project.custom_types
             ],
             "known_tags": list(project.known_tags),
+            "ungrouped_order": list(project.ungrouped_order),
             "groups": [Storage.group_to_dict(g) for g in project.groups],
+            "group_order": list(project.group_order),
         }, sort_keys=True, ensure_ascii=False)
         return notes_json, connections_json, meta_json
 
@@ -311,7 +318,8 @@ class Storage:
         """Serialise a GroupData."""
         return {"id": g.id, "title": g.title, "x": g.x, "y": g.y,
                 "width": g.width, "height": g.height,
-                "color": g.color, "locked": g.locked}
+                "color": g.color, "locked": g.locked,
+                "children_order": list(g.children_order)}
 
     @staticmethod
     def group_from_dict(d: dict):
@@ -320,4 +328,5 @@ class Storage:
             id=d["id"], title=d.get("title", ""),
             x=float(d.get("x", 0.0)), y=float(d.get("y", 0.0)),
             width=float(d.get("width", 400.0)), height=float(d.get("height", 300.0)),
-            color=d.get("color", "#4da6ff"), locked=bool(d.get("locked", False)))
+            color=d.get("color", "#4da6ff"), locked=bool(d.get("locked", False)),
+            children_order=list(d.get("children_order", [])))

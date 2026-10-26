@@ -147,35 +147,71 @@ def _write(code, data):
 
 
 def _cli(argv):
+    """Command line interface: ``new`` / ``update`` / ``check``.
 
-    """Command line interface: ``new`` / ``update`` / ``check``."""
+    Multiple language codes can be passed in one call::
+
+        python i18n.py check fr de es
+        python i18n.py update fr de es
+        python i18n.py new fr de es
+
+    ``new`` optionally takes a display name for each language, but only
+    when exactly one code is given (it applies to that single language)::
+
+        python i18n.py new fr "Français"
+    """
     if len(argv) < 3 or argv[1] not in ("new", "update", "check"):
         print(__doc__)
         return 1
 
-    cmd, code = argv[1], argv[2]
+    cmd = argv[1]
+    codes = argv[2:]
+    # Only "new" can take a display name, and only when there is exactly
+    # one language (otherwise the extra arg would be ambiguous — treat it
+    # as another language code and let the caller sort it out).
+    display_name = None
+    if cmd == "new" and len(codes) == 2:
+        second = codes[1]
+        if not (second.isalpha() and len(second) <= 5 and second.islower()):
+            display_name = second
+            codes = [codes[0]]
+
     keys = extract_keys()
-    data = _read(code)
+    exit_code = 0
 
-    if cmd == "new" and not data:
-        data = {"_name": argv[3] if len(argv) > 3 else code}
+    for code in codes:
+        data = _read(code)
 
-    if cmd in ("new", "update"):
-        added = 0
-        for k in keys:
-            if k not in data:
-                data[k] = ""
-                added += 1
-        _write(code, data)
-        print(f"locales/{code}.json: {added} neue Schlüssel, {len(keys)} insgesamt.")
+        if cmd == "new":
+            if not data:
+                data = {"_name": display_name if display_name and code == codes[0]
+                        else code}
 
-    missing = [k for k in keys if not data.get(k)]
-    if cmd == "check":
-        print(f"{len(missing)} von {len(keys)} Texten fehlen in '{code}':")
-        for k in missing:
-            print("  ", k.replace("\n", "\\n"))
+        if cmd in ("new", "update"):
+            added = 0
+            empty = 0
+            for k in keys:
+                if k not in data:
+                    data[k] = ""
+                    added += 1
+                elif not data.get(k):
+                    empty += 1
+            _write(code, data)
+            msg = f"locales/{code}.json: {added} neue Schlüssel, {len(keys)} insgesamt."
+            if empty:
+                msg += f"  ·  {empty} leer (noch zu übersetzen)."
+            print(msg)
 
-    return 0
+        if cmd == "check":
+            missing = [k for k in keys if not data.get(k)]
+            print(f"\n=== {code} ===")
+            print(f"{len(missing)} von {len(keys)} Texten fehlen in '{code}':")
+            for k in missing:
+                print("  ", k.replace("\n", "\\n"))
+            if missing:
+                exit_code = 1
+
+    return exit_code
 
 
 if __name__ == "__main__":

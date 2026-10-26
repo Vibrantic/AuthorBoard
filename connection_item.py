@@ -213,20 +213,35 @@ class ConnectionItem(QGraphicsPathItem):
     # ---------- Painting ----------
 
     def _draw_thread(self, painter, path, color):
-        """Glow (if selected), shadow and the thread itself."""
+        """Draw one thread at full detail.
+
+        Qt's ``drawPath`` combines ``fillPath`` + ``strokePath``.  Since this
+        item never sets a brush, the brush comes from whatever Qt's engine
+        left the painter at — under ``QGraphicsScene.render()`` that can be
+        the default black brush, which fills the bezier's convex hull and
+        produces the wide black bands.  ``strokePath`` only strokes, so it's
+        safe regardless of the current brush state.
+        """
+        painter.setBrush(Qt.BrushStyle.NoBrush)  # defensive
         if self.isSelected():
-            painter.setPen(QPen(QColor(108, 156, 255, 110), 9,
-                                Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-            painter.drawPath(path)
+            painter.strokePath(
+                path,
+                QPen(QColor(108, 156, 255, 110), 9,
+                     Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap),
+            )
         painter.save()
         painter.translate(2, 4)
-        painter.setPen(QPen(QColor(0, 0, 0, 80), 3.5,
-                            Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        painter.drawPath(path)
+        painter.strokePath(
+            path,
+            QPen(QColor(0, 0, 0, 80), 3.5,
+                 Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap),
+        )
         painter.restore()
-        painter.setPen(QPen(color, 3, Qt.PenStyle.SolidLine,
-                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        painter.drawPath(path)
+        painter.strokePath(
+            path,
+            QPen(color, 3, Qt.PenStyle.SolidLine,
+                 Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin),
+        )
 
     def _draw_faded(self, painter, path, color, over_notes):
         """Draw the thread with the part over notes at reduced opacity."""
@@ -259,13 +274,7 @@ class ConnectionItem(QGraphicsPathItem):
                          QTextOption(Qt.AlignmentFlag.AlignCenter))
 
     def paint(self, painter, option, widget=None):
-        """Qt: draw the item (applying rules A, B, C, D).
-
-        Threads that touch the current selection are **always visible and
-        clickable**, regardless of zoom or viewport position — they are the
-        answer to "what is this note connected to?".  All other threads go
-        through the hide rules (rule B, rule A, viewport skip).
-        """
+        """Qt: draw the item (applying rules A, B, C, D)."""
         path = self._cached_path
         if path.isEmpty():
             self._hidden = True
@@ -274,6 +283,11 @@ class ConnectionItem(QGraphicsPathItem):
         scene = self.scene()
         if scene is None:
             self._hidden = True
+            return
+
+        # Export path: full fidelity, no LOD, no culling, no fading.
+        if getattr(scene, "export_mode", False):
+            self._paint_full(painter, path)
             return
 
         # Rule B: selection focus.
@@ -375,6 +389,39 @@ class ConnectionItem(QGraphicsPathItem):
                 pin.model.color, selected=pin.isSelected(),
                 highlight=pin.highlight, locked=pin.model.locked,
             )
+        self._draw_label(painter, color)
+
+    def _paint_full(self, painter, path):
+        """Full-fidelity paint used by PNG export.
+
+        Uses ``strokePath`` (never ``drawPath``) so the bezier's interior is
+        never filled, even if the painter's brush is left over from a
+        previous item.
+        """
+        self._hidden = False
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        color = QColor(self.model.color)
+        if not color.isValid():
+            color = QColor(DEFAULT_THREAD_COLOR)
+
+        painter.strokePath(
+            path,
+            QPen(color, 1.5, Qt.PenStyle.SolidLine,
+                 Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin),
+        )
+
+        half = PinItem.SIZE / 2
+        for pin in (self.start_pin, self.end_pin):
+            c = pin.scenePos()
+            paint_pin_head(
+                painter,
+                QRectF(c.x() - half, c.y() - half, PinItem.SIZE, PinItem.SIZE),
+                pin.model.color, selected=False,
+                highlight=False, locked=pin.model.locked,
+            )
+
         self._draw_label(painter, color)
 
     def remove_from_pins(self):

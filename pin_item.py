@@ -175,27 +175,19 @@ class PinItem(QGraphicsEllipseItem):
                 connection.remove_from_pins()
 
     def paint(self, painter, option, widget=None):
-        """Qt: draw the item (LOD tier from visible pin count and zoom).
-
-        Four tiers, chosen by ``scene._visible_pin_count`` (set in
-        ``BoardView.paintEvent``) and the current zoom:
-
-            <= PIN_VISIBLE_FULL     full pixmap head (gradient, highlight,
-                                    lock glyph, selection ring) — unchanged
-            <= PIN_VISIBLE_SIMPLE   single filled circle with 1-px border
-            <= PIN_VISIBLE_MINIMAL  single 3-px dot, no border
-            >  PIN_VISIBLE_MINIMAL  skipped (too small to read at this
-                                    density; same idea as the thread tier
-                                    that drops labels above VISIBLE_LABEL)
-
-        The pin's own ``paint`` is what draws it; the pixmap cache in
-        ``paint_pin_head`` is only used at full detail, so the simple and
-        minimal tiers bypass it entirely (they're cheap QPainter primitives).
-        """
+        """Qt: draw the item (LOD tier from visible pin count and zoom)."""
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-        lod = option.levelOfDetailFromTransform(painter.worldTransform())
         scene = self.scene()
+        if scene is not None and getattr(scene, "export_mode", False):
+            # Im Export-Modus immer die volle, detaillierte Pin-Grafik zeichnen
+            paint_pin_head(
+                painter, self.rect(), self.model.color,
+                selected=False, highlight=False, locked=self.model.locked,
+            )
+            return
+
+        lod = option.levelOfDetailFromTransform(painter.worldTransform())
         visible = (getattr(scene, "_visible_pin_count", 0)
                    if scene is not None else 0)
 

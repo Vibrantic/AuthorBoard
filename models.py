@@ -198,6 +198,7 @@ class GroupData:
     height: float = 300.0
     color: str = DEFAULT_GROUP_COLOR
     locked: bool = False
+    children_order: List[str] = field(default_factory=list)
 
 @dataclass
 class ProjectData:
@@ -208,6 +209,8 @@ class ProjectData:
     custom_types: List[NoteTypeData] = field(default_factory=list)
     known_tags: List[str] = field(default_factory=list)       # tag autocomplete (per book)
     blobs: Dict[str, bytes] = field(default_factory=dict)     # attachment id -> bytes
+    ungrouped_order: List[str] = field(default_factory=list)
+    group_order: List[str] = field(default_factory=list)  # NEW
 
 
 def note_matches(note: NoteData, text: str = "", type_key: str = "",

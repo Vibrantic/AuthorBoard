@@ -1,5 +1,66 @@
 # Changelog
 
+## 1.2.5
+
+## New features
+
+### Notes panel (tree view)
+
+- **Grouped Notes section.** The Notes panel now has a second section that mirrors the board's geometric group nesting, with live note counts per group and an *Ohne Gruppe* bucket for ungrouped notes. The existing type-based view is now under an **All Notes** section. Selecting a note in either section highlights both copies.
+- **Clickable group headers.** Clicking a group header selects the group on the board (accent border) and fits the view to it; double-click renames it. Note clicks keep their original centre-on-note behaviour.
+- **Drag & drop reordering.** Notes and groups in the Grouped section can be reordered by dragging. Dropping a note onto a group moves it in; dropping between two items reorders locally; dropping into *Ohne Gruppe* removes it from any group. Order is stored per group (`GroupData.children_order`) and per notebook (`ProjectData.ungrouped_order`) and survives reloads; every drop is one undo step. Groups cannot be dropped into themselves or their descendants; the All Notes section stays derived-from-types (not reorderable).
+- **Arrow-key navigation and Space/Enter.** Up/Down highlight groups on the board (accent frame) as well as notes (selection + Inspector update), so stepping through the tree always produces visible feedback. Enter toggles expansion on headers and opens the editor on notes. Space acts like a click — selects and jumps to the current item on the board. Arrow navigation remains non-scrolling, so browsing the tree is stable.
+- **Type-group headers are first-class.** Type headers in *All Notes* are selectable and carry a `("type", key)` payload — Up/Down can land on them without collapsing the bucket or blanking the Inspector, and Enter/click/double-click toggles expansion, matching group headers in the Grouped section.
+- **Smooth header navigation.** Up/Down from a group or type-group header moves to the adjacent header (skipping the whole visible subtree of any open group), so stepping between collapsed and open headers feels consistent.
+
+### Multi-selection actions
+
+- **Fan-out menu actions.** Colour, lock, delete, status, thread-label and group-raise actions in the context menu now apply to every selected item of the same kind when the right-clicked item is part of a multi-selection (plural labels appear in this case). Right-clicking an unselected item replaces the selection with it first.
+- **`Ctrl+L` multi-lock.** Locks all selected lockable items when at least one is unlocked, unlocks them all when all are already locked. Works across notes, pins and group frames; each fan-out is one undo step.
+- **Mixed-selection lock action.** With a mixed selection of notes, pins and groups, right-clicking any selected item shows a single **Auswahl sperren / Auswahl entsperren** (`Ctrl+L`) action at the top of the menu. Kind-homogeneous selections keep their existing plural labels.
+
+### Groups
+
+- **Four-way z-order.** **Gruppe nach vorne**, **Gruppe eine Ebene nach vorne**, **Gruppe eine Ebene nach hinten**, **Gruppe nach hinten** — with a pluralised variant that fans the action out to every selected group while preserving their relative order. All four renormalise the z-sequence first (so nesting badges stay consistent), repaint every group's badge, and produce identical behaviour whether the group is nested or top-level.
+- **Nested grouping.** **Gruppe aus Auswahl** (`Ctrl+G`) is now also available on the group branch of the context menu, so right-clicking a selected group — alone or in a mixed selection with notes — offers the operation directly.
+- **Parental locking.** Locking a group cascades the lock to every descendant note and nested group in one step, freezing the whole frame as a unit. Child locks remain independent afterwards — a descendant can be unlocked (and moved on its own, even out of the still-locked parent) and re-locked without affecting the parent. Unlocking a group does *not* cascade, so a locked parent can hold both locked and explicitly-unlocked children. Implemented as a one-time recursive `set_locked(True)` via `BoardScene._cascade_lock_on`; each cascade is one undo step; no new persistent state, so old files load unchanged.
+
+---
+
+## Bug fixes
+
+### Board and rendering
+
+- **PNG export — threads as filled black bands.** Overridden `ConnectionItem.paint()` never reset the painter's brush, so Qt's `drawPath()` filled the bezier's interior with the leftover black brush during offscreen `QGraphicsScene.render()`. All thread drawing now uses `strokePath()` (with `NoBrush` set defensively), so only the stroke is drawn.
+- **Group nesting.** A group behind a bigger group is no longer treated as a child of that group — nesting now requires the child to be **in front of** its parent, matching `group_members`, the group badge index and drag behaviour. Raising a group above another detaches it cleanly.
+- **Locked children follow their group.** Locked notes and locked sub-groups now move with their containing group frame — locking only prevents an item from being dragged on its own. Matches the existing pin behaviour (a locked pin can't be dragged by itself but always follows its note). One-line change in `BoardScene.group_block`.
+- **Rubber-band selection — full containment only.** Dragging a selection rectangle that merely crosses a note, pin or group frame no longer selects it; only fully-contained items are selected. Only notes, pins and group frames take part in band selection — threads are picked by clicking them. Group frames use their full rectangle for the containment test; notes and pins use their visible geometry (not their drop-shadow bounding rect).
+- **Rubber-band highlight — no touch flashes.** During a band drag, items are highlighted only once they are fully inside the band. The filter runs on every drag update rather than only on release, and `Ctrl`+drag merges with the pre-drag selection instead of wiping it out frame by frame.
+- **Multi-selection move.** Dragging any selected note or group now moves **every** selected note and group together, and their contained items ride along — previously only the clicked item moved. `BoardView.mousePressEvent` / `mouseMoveEvent` / `mouseReleaseEvent` intercept the drag when the press lands on a movable selected note or group and delegate movement to a new `BoardScene.build_selection_block()`, which unions the selected groups' blocks and adds any selected notes not covered by a selected group, so nothing moves twice. Single-item drags, pin drags and middle-button panning are unchanged.
+- **Group resize.** A selected group can be resized again — pressing on its resize grip while the group is already selected now reaches `GroupItem.mousePressEvent` instead of being intercepted by the multi-selection drag handler.
+
+### Notes panel (tree view)
+
+- **Selection highlight follows the last click.** Selecting a note that appears in both sections now keeps the tree highlight in whichever section the user last clicked in, instead of always jumping back to *All Notes*.
+- **Drag-and-drop AttributeError.** Corrected a typo (`scene_ungrouped_order_list` → `scene.ungrouped_order_list`) that raised `AttributeError` whenever a drop targeted the *Ohne Gruppe* bucket or an item inside it.
+- **Mixed order lists and undo.** The Grouped section now honours the manual order list as a single interleaved stream of notes and sub-groups — a note dropped below a sub-group stays there instead of being re-sorted to the top. `apply_state` also restores `group_order` and `ungrouped_order` from the undo snapshot's `meta`, so undoing a top-level or *Ohne Gruppe* reorder correctly reverts the tree.
+- **No duplicate notes.** The recursive builder now tracks emitted note and group ids per container, so a note that lives inside a group is emitted exactly once (by that group), and the leftover pass only adds notes that weren't already placed by the manual order list.
+
+---
+
+## Development
+
+- **i18n CLI — multiple languages per call.** `python i18n.py check`, `update` and `new` now accept multiple language codes in one invocation (`check fr de es` prints a per-language block and exits non-zero if any language is incomplete). `new` still takes an optional display name when exactly one code is given.
+- **i18n CLI — empty translation reporting.** `python i18n.py update <codes>` now also counts and reports *empty* translation values (previously only keys not present in the file), so the summary matches what `check` reports. Empty translations now appear as `· N leer (noch zu übersetzen).` in the update output.
+
+---
+
+## Note on this release
+
+This is a large tree-view and selection release. The Notes panel is now a first-class organiser for grouped and ungrouped notes, and the board's multi-selection behaviour is consistent across notes, pins and group frames — including mixed selections, parental locking, and multi-item drags. As always, existing `.json` notebook files load unchanged.
+
+*Please back up your work before upgrading.*
+
 ## 1.2.4
 
 The first release with a fully functional in-app updater. Once installed
