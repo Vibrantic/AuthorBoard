@@ -8,18 +8,6 @@
   a timeline, a rich-text editor with comments, attachments and spell checking.
 </p>
 
----
-
-> [!NOTE]
-> **Development Roadmap & Prototyping Notice**
-> 
-> All releases up to **v2.0.0** represent initial rapid prototyping stages. During this phase, AI tools are heavily leveraged to accelerate development, test feature concepts, and build out functional workflows.
-> Using AI for rapid iteration is a practical necessity for this project: I work full-time in an entirely different field, and balancing development alongside work, family, friends, and everyday life makes AI assistance > essential for making steady progress.
-> 
-> Once the core functionality and feature set are fully finalized, the entire application will undergo a complete human-led rewrite—focusing on code refactoring, performance optimization, and long-term maintainability.
-> Rest assured that backward compatibility will be preserved, ensuring that any projects created during the prototyping phase remain fully supported and functional out of the box with v2.0.0.
----
-
 <p align="center">
   <a href="LICENSE"><img alt="License: GPL v3" src="https://img.shields.io/badge/license-GPL%20v3-blue.svg?style=flat-square&"></a>
   <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-3776AB.svg?style=flat-square&logo=python&logoColor=white">
@@ -35,6 +23,17 @@
 </p>
 
 ---
+---
+
+> [!NOTE]
+> **Development Roadmap & Prototyping Notice**
+> 
+> All releases up to **v2.0.0** represent initial rapid prototyping stages. During this phase, AI tools are heavily leveraged to accelerate development, test feature concepts, and build out functional workflows.
+> Using AI for rapid iteration is a practical necessity for this project: I work full-time in an entirely different field, and balancing development alongside work, family, friends, and everyday life makes AI assistance > essential for making steady progress.
+> 
+> Once the core functionality and feature set are fully finalized, the entire application will undergo a complete human-led rewrite—focusing on code refactoring, performance optimization, and long-term maintainability.
+> Rest assured that backward compatibility will be preserved, ensuring that any projects created during the prototyping phase remain fully supported and functional out of the box with v2.0.0.
+
 ---
 
 <div align="center">
