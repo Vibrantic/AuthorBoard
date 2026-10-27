@@ -569,5 +569,9 @@
   "Gruppe eine Ebene nach hinten": "Grupu jedan nivo nazad",
   "Gruppe nach hinten": "Grupu na stražnju stranu",
   "Gruppen auflösen": "Raspusti grupe",
-  "Keine Notiz oder Gruppe ausgewählt.": "Nijedna bilješka ili grupa nije odabrana."
+  "Keine Notiz oder Gruppe ausgewählt.": "Nijedna bilješka ili grupa nije odabrana.",
+  "Notizen-Panel einblenden": "Prikaži panel s bilješkama",
+  "Inspector einblenden": "Prikaži inspektor",
+  "Blendet das Notizen-Panel wieder ein und heftet es links an": "Ponovo prikazuje panel s bilješkama i kači ga lijevo",
+  "Blendet den Inspector wieder ein und heftet ihn rechts an": "Ponovo prikazuje inspektor i kači ga desno"
 }

@@ -569,5 +569,9 @@
   "Download: {r} / {t} Bytes ({pct} %)": "Descarregamento: {r} / {t} Bytes ({pct} %)",
   "Download: {r} Bytes": "Descarregamento: {r} Bytes",
   "Was ist neu": "O que há de novo",
-  "Keine Notiz oder Gruppe ausgewählt.": "Nenhuma nota ou grupo selecionado."
+  "Keine Notiz oder Gruppe ausgewählt.": "Nenhuma nota ou grupo selecionado.",
+  "Notizen-Panel einblenden": "Mostrar painel de notas",
+  "Inspector einblenden": "Mostrar inspetor",
+  "Blendet das Notizen-Panel wieder ein und heftet es links an": "Mostra novamente o painel de notas e fixa-o à esquerda",
+  "Blendet den Inspector wieder ein und heftet ihn rechts an": "Mostra novamente o inspetor e fixa-o à direita"
 }

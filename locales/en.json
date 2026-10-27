@@ -572,5 +572,9 @@
   "Gruppe eine Ebene nach vorne": "Bring group forward one step",
   "Gruppe eine Ebene nach hinten": "Send group back one step",
   "Gruppe nach hinten": "Send group to back",
-  "Keine Notiz oder Gruppe ausgewählt.": "No note or group selected."
+  "Keine Notiz oder Gruppe ausgewählt.": "No note or group selected.",
+  "Notizen-Panel einblenden": "Show notes panel",
+  "Inspector einblenden": "Show inspector",
+  "Blendet das Notizen-Panel wieder ein und heftet es links an": "Shows the notes panel again and pins it to the left",
+  "Blendet den Inspector wieder ein und heftet ihn rechts an": "Shows the inspector again and pins it to the right"
 }

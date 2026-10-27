@@ -570,5 +570,9 @@
   "Gruppe nach hinten": "Группу на задний план",
   "Gruppen auflösen": "Растворить группы",
   "Durchsuchbare Dokumentation öffnen (F1)": "Открыть документацию с поиском (F1)",
-  "Keine Notiz oder Gruppe ausgewählt.": "Заметка или группа не выбраны."
+  "Keine Notiz oder Gruppe ausgewählt.": "Заметка или группа не выбраны.",
+  "Notizen-Panel einblenden": "Показать панель заметок",
+  "Inspector einblenden": "Показать инспектор",
+  "Blendet das Notizen-Panel wieder ein und heftet es links an": "Снова показывает панель заметок и закрепляет ее слева",
+  "Blendet den Inspector wieder ein und heftet ihn rechts an": "Снова показывает инспектор и закрепляет его справа"
 }

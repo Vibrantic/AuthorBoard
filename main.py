@@ -772,6 +772,24 @@ class MainWindow(QMainWindow):
         self.act_timeline = self.timeline_dock.toggleViewAction()
         self.act_timeline.setText(tr("Zeitleiste"))
         view_menu.addAction(self.act_timeline)
+
+        # NEW: restore the two always-relevant docks.
+        view_menu.addSeparator()
+        self.act_tree_dock = self._action(
+            tr("Notizen-Panel einblenden"), "Ctrl+Shift+N",
+            self.restore_tree_dock,
+        )
+        self.act_inspector_dock = self._action(
+            tr("Inspector einblenden"), "Ctrl+Shift+I",
+            self.restore_inspector_dock,
+        )
+        self._tip(self.act_tree_dock,
+                  tr("Blendet das Notizen-Panel wieder ein und heftet es links an"))
+        self._tip(self.act_inspector_dock,
+                  tr("Blendet den Inspector wieder ein und heftet ihn rechts an"))
+        view_menu.addAction(self.act_tree_dock)
+        view_menu.addAction(self.act_inspector_dock)
+
         view_menu.addAction(self.act_stats)
 
         # --- extra actions: lock, focus mode, settings, help ---
@@ -811,6 +829,7 @@ class MainWindow(QMainWindow):
             self.act_fit, self.act_zoom, self.act_arrange, self.act_snap,
             self.act_stats, self.act_timeline, self.act_lock, self.act_focus,
             self.act_flow,
+            self.act_tree_dock, self.act_inspector_dock,
         ]
 
         self._tip(self.act_shelf, tr("Zurück zur Startseite mit dem Bücherregal (Strg+B)"))
@@ -2510,6 +2529,26 @@ class MainWindow(QMainWindow):
         """Show the remembered docks again."""
         for d, visible in self._dock_vis.items():
             d.setVisible(visible)
+
+    def restore_tree_dock(self):
+        """View → Notes panel: bring the Notes dock back to its original place.
+
+        Works even if the user closed the dock (via its × button) or dragged
+        it out and closed the resulting floating window.
+        """
+        if self.tree_dock.isFloating():
+            self.tree_dock.setFloating(False)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.tree_dock)
+        self.tree_dock.show()
+        self.tree_dock.raise_()
+
+    def restore_inspector_dock(self):
+        """View → Inspector panel: bring the Inspector/Comments dock back."""
+        if self.inspector_dock.isFloating():
+            self.inspector_dock.setFloating(False)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.inspector_dock)
+        self.inspector_dock.show()
+        self.inspector_dock.raise_()
 
     def show_board(self):
         """Switch the central widget to the board."""

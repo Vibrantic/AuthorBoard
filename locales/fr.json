@@ -570,5 +570,9 @@
   "Download: {r} / {t} Bytes ({pct} %)": "Téléchargement : {r} / {t} octets ({pct} %)",
   "Download: {r} Bytes": "Téléchargement : {r} octets",
   "Was ist neu": "Nouveautés",
-  "Keine Notiz oder Gruppe ausgewählt.": "Aucune note ni aucun groupe sélectionné."
+  "Keine Notiz oder Gruppe ausgewählt.": "Aucune note ni aucun groupe sélectionné.",
+  "Notizen-Panel einblenden": "Afficher le panneau de notes",
+  "Inspector einblenden": "Afficher l'inspecteur",
+  "Blendet das Notizen-Panel wieder ein und heftet es links an": "Affiche à nouveau le panneau de notes et l'épingle à gauche",
+  "Blendet den Inspector wieder ein und heftet ihn rechts an": "Affiche à nouveau l'inspecteur et l'épingle à droite"
 }

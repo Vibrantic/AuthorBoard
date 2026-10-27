@@ -571,5 +571,9 @@
   "Gruppe nach hinten": "将分组置于底层",
   "Gruppen auflösen": "解散分组",
   "Notizen mit Datum auf einer horizontalen Zeitleiste anzeigen": "在水平时间轴上显示带有日期的笔记",
-  "Keine Notiz oder Gruppe ausgewählt.": "未选择任何笔记或群组。"
+  "Keine Notiz oder Gruppe ausgewählt.": "未选择任何笔记或群组。",
+  "Notizen-Panel einblenden": "显示笔记面板",
+  "Inspector einblenden": "显示检查器",
+  "Blendet das Notizen-Panel wieder ein und heftet es links an": "重新显示笔记面板并固定在左侧",
+  "Blendet den Inspector wieder ein und heftet ihn rechts an": "重新显示检查器并固定在右侧"
 }

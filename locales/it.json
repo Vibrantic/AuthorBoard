@@ -570,5 +570,9 @@
   "Download: {r} / {t} Bytes ({pct} %)": "Download: {r} / {t} Byte ({pct} %)",
   "Download: {r} Bytes": "Download: {r} Byte",
   "Was ist neu": "Novità",
-  "Keine Notiz oder Gruppe ausgewählt.": "Nessuna nota o gruppo selezionato."
+  "Keine Notiz oder Gruppe ausgewählt.": "Nessuna nota o gruppo selezionato.",
+  "Notizen-Panel einblenden": "Mostra pannello note",
+  "Inspector einblenden": "Mostra ispettore",
+  "Blendet das Notizen-Panel wieder ein und heftet es links an": "Mostra di nuovo il pannello note e lo fissa a sinistra",
+  "Blendet den Inspector wieder ein und heftet ihn rechts an": "Mostra di nuovo l'ispettore e lo fissa a destra"
 }

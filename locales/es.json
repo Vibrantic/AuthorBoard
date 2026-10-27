@@ -569,5 +569,9 @@
   "Gruppe eine Ebene nach hinten": "Enviar grupo un nivel atrás",
   "Gruppe nach hinten": "Enviar grupo al fondo",
   "Gruppen auflösen": "Disolver grupos",
-  "Keine Notiz oder Gruppe ausgewählt.": "Ninguna nota o grupo seleccionado."
+  "Keine Notiz oder Gruppe ausgewählt.": "Ninguna nota o grupo seleccionado.",
+  "Notizen-Panel einblenden": "Mostrar panel de notas",
+  "Inspector einblenden": "Mostrar inspector",
+  "Blendet das Notizen-Panel wieder ein und heftet es links an": "Muestra de nuevo el panel de notas y lo fija a la izquierda",
+  "Blendet den Inspector wieder ein und heftet ihn rechts an": "Muestra de nuevo el inspector y lo fija a la derecha"
 }

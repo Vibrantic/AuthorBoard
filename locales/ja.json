@@ -569,5 +569,9 @@
   "Download: {r} / {t} Bytes ({pct} %)": "ダウンロード: {r} / {t} バイト ({pct} %)",
   "Download: {r} Bytes": "ダウンロード: {r} バイト",
   "Was ist neu": "新機能・変更点",
-  "Keine Notiz oder Gruppe ausgewählt.": "ノートまたはグループが選択されていません。"
+  "Keine Notiz oder Gruppe ausgewählt.": "ノートまたはグループが選択されていません。",
+  "Notizen-Panel einblenden": "ノートパネルを表示",
+  "Inspector einblenden": "インスペクターを表示",
+  "Blendet das Notizen-Panel wieder ein und heftet es links an": "ノートパネルを再表示し、左側に固定します",
+  "Blendet den Inspector wieder ein und heftet ihn rechts an": "インスペクターを再表示し、右側に固定します"
 }

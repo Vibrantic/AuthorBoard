@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.6
+
+Here is an addition(fix) that should have been built in from the get-go.
+- Fix (docks): Added View → Show notes panel (Ctrl+Shift+N) and View → Show inspector (Ctrl+Shift+I). Closing the Notes or Inspector dock used to make it unreachable; these entries re-show the dock and re-attach it to its original side (left / right), including when it was dragged out to a floating window. Both entries are greyed out on the bookshelf, matching the other board-only actions.
+- Updated languages for those additions
+
 ## 1.2.5
 
 ## New features
