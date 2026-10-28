@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.7
+Today we have a small quality of life implementation.
+- Right-click-drag from one note body to another now creates a thread in a single gesture — a pin is spawned at the press point on the source note and at the release point on the target note, then the two are connected. Existing gestures keep working unchanged: pin → pin connects the two existing pins without spawning anything; pin → note body spawns a pin only on the target; note body → pin spawns a pin only on the source. If the release point is within 11 px of an existing pin on the target note, that pin is reused instead of spawning a duplicate. A dashed preview line follows the pointer throughout the drag and target pins highlight as you hover them. The whole gesture is one undo checkpoint, and a right-click without a drag still opens the context menu as before.
+
+
 ## 1.2.6
 
 Here is an addition(fix) that should have been built in from the get-go.

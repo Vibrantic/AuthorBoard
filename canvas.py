@@ -143,6 +143,8 @@ class BoardScene(QGraphicsScene):
         self._drag_pin = None
         self._drag_line = None
         self._hover_pin = None
+        self._drag_from_note = None
+        self._drag_from_note_pos = None
 
         self._note_rects = {}
         self._filter_deferred = False
@@ -254,6 +256,27 @@ class BoardScene(QGraphicsScene):
         for item in self.items(pos):
             if isinstance(item, PinItem) and item is not exclude:
                 return item
+        return None
+
+    def _note_under(self, scene_pos):
+        """The topmost note whose rect contains ``scene_pos``, or None.
+
+        The naive approach — ``_item_at(scene_pos)`` — returns a ``ConnectionItem``
+        if a thread crosses the release point, and returns a ``PinItem`` if a
+        pin is exactly there.  Both would give us the wrong source note for a
+        "note body → note body" drag.  This helper first tries those fast paths
+        for the *note* item specifically, then falls back to scanning the note
+        rects (O(N), only on release, so negligible).
+        """
+        item = self._item_at(scene_pos)
+        if isinstance(item, NoteItem):
+            return item
+        if isinstance(item, PinItem):
+            return item.note
+        # Thread or nothing: scan note rects.
+        for note in self.note_lookup.values():
+            if note.mapRectToScene(note.rect()).contains(scene_pos):
+                return note
         return None
 
     # -------------------------------------------------- Note-rect index
@@ -1407,8 +1430,16 @@ class BoardScene(QGraphicsScene):
             self._right_item = item
             self._right_press_screen = event.screenPos()
             self._right_moved = False
+
             if isinstance(item, PinItem):
+                # Existing behaviour: right-drag from a pin connects it.
                 self._begin_connect(item, event.scenePos())
+            elif isinstance(item, NoteItem):
+                # NEW: right-drag from a note body starts a note → ? connect;
+                # the source pin will be spawned at release if the drag goes
+                # to another note.
+                self._begin_connect_from_note(item, event.scenePos())
+
             event.accept()
             return
         if self._item_at(event.scenePos()) is None:
@@ -1419,9 +1450,11 @@ class BoardScene(QGraphicsScene):
         """Qt event handler: the mouse moved."""
         if self._right_press_screen is not None:
             delta = event.screenPos() - self._right_press_screen
-            if delta.manhattanLength() > 6:
+            if delta.manhattanLength() > 3:
                 self._right_moved = True
-            if self._drag_pin is not None:
+            # Update the dashed preview line for BOTH kinds of drag: from a pin
+            # (self._drag_pin) and from a note body (self._drag_from_note).
+            if self._drag_line is not None:
                 self._update_connect(event.scenePos())
             event.accept()
             return
@@ -1434,24 +1467,60 @@ class BoardScene(QGraphicsScene):
         self.interaction_finished.emit()
 
     def _handle_release(self, event):
-        """Right-button release: finish a thread drag or show a context menu."""
+        """Right-button release: finish a connect-drag or show a context menu."""
         if (event.button() == Qt.MouseButton.RightButton
                 and self._right_press_screen is not None):
             moved = self._right_moved
             item = self._right_item
-            start = self._drag_pin
-            target = None
-            if start is not None:
-                target = self._pin_at(event.scenePos(), exclude=start)
+            start_pin = self._drag_pin
+            start_note = self._drag_from_note
+            start_pos = self._drag_from_note_pos
+
+            # Capture the target *before* ``_end_connect`` clears state.
+            target_pin = None
+            target_note = None
+            release_pos = event.scenePos()
+            if moved:
+                target_pin = self._pin_at(release_pos, exclude=start_pin)
+                if target_pin is not None:
+                    target_note = target_pin.note
+                else:
+                    # Robustly find the note under the release point — the
+                    # click may land on a thread or a pin of another note,
+                    # which would confuse `_item_at`.
+                    target_note = self._note_under(release_pos)
+
             self._end_connect()
             self._right_item = None
             self._right_press_screen = None
             self._right_moved = False
-            if start is not None and moved:
-                if target is not None:
-                    self.create_connection(start, target)
-            elif not moved:
-                self.show_context_menu(item, event.screenPos(), event.scenePos())
+
+            if moved:
+                # --- pin → pin (unchanged) ---
+                if start_pin is not None and target_pin is not None:
+                    self.create_connection(start_pin, target_pin)
+                # --- pin → note body: spawn pin on target note ---
+                elif start_pin is not None and target_note is not None:
+                    new_pin = self._pin_or_spawn(target_note, release_pos)
+                    self.create_connection(start_pin, new_pin)
+                # --- note body → pin: spawn pin on source note ---
+                elif start_note is not None and target_pin is not None:
+                    src_pin = self._pin_or_spawn(start_note, start_pos)
+                    self.create_connection(src_pin, target_pin)
+                # --- note body → note body: spawn both, then connect ---
+                elif start_note is not None and target_note is not None:
+                    if start_note is target_note:
+                        # Same note on both ends — no self-connection.
+                        pass
+                    else:
+                        src_pin = self._pin_or_spawn(start_note, start_pos)
+                        dst_pin = self._pin_or_spawn(target_note, release_pos)
+                        self.create_connection(src_pin, dst_pin)
+            else:
+                # A plain right-click (no drag): show the context menu.
+                self.show_context_menu(item, event.screenPos(),
+                                       event.scenePos())
+
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -1470,12 +1539,51 @@ class BoardScene(QGraphicsScene):
         self._drag_line = line
         self._update_connect(pos)
 
+    def _begin_connect_from_note(self, note, pos):
+        """Start a right-drag that begins *on a note body*, not on a pin.
+
+        The preview line is drawn from ``pos`` (the press point).  The actual
+        source pin is resolved on release: if the release lands on the same
+        note, nothing happens; if it lands elsewhere, a pin is spawned at
+        ``pos`` on ``note`` and the drag connects it.
+
+        We store the note and the press scene position on the scene so
+        :meth:`_handle_release` can finish the job.  The preview line is a
+        normal ``_drag_line`` so ``_update_connect`` keeps refreshing it.
+        """
+        self._drag_pin = None
+        self._drag_from_note = note
+        self._drag_from_note_pos = pos
+
+        line = QGraphicsPathItem()
+        line.setPen(QPen(QColor(ACCENT), 2.5, Qt.PenStyle.DashLine,
+                         Qt.PenCapStyle.RoundCap))
+        line.setZValue(10 ** 6)
+        line.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self.addItem(line)
+        self._drag_line = line
+        self._update_connect_from_note(pos)
+
+    def _update_connect_from_note(self, pos):
+        """Draw the initial preview from the note press point to ``pos``."""
+        if self._drag_line is None or self._drag_from_note is None:
+            return
+        self._drag_line.setPath(thread_path(self._drag_from_note_pos, pos))
+
     def _update_connect(self, pos):
         """Move the dashed preview line and highlight the pin under the pointer."""
-        if self._drag_line is None or self._drag_pin is None:
+        if self._drag_line is None:
             return
-        self._drag_line.setPath(thread_path(self._drag_pin.scenePos(), pos))
-        target = self._pin_at(pos, exclude=self._drag_pin)
+        if self._drag_pin is not None:
+            start = self._drag_pin.scenePos()
+            exclude = self._drag_pin
+        elif self._drag_from_note is not None:
+            start = self._drag_from_note_pos
+            exclude = None
+        else:
+            return
+        self._drag_line.setPath(thread_path(start, pos))
+        target = self._pin_at(pos, exclude=exclude)
         if target is not self._hover_pin:
             if self._hover_pin is not None:
                 self._hover_pin.set_highlight(False)
@@ -1493,6 +1601,29 @@ class BoardScene(QGraphicsScene):
             self._hover_pin.set_highlight(False)
             self._hover_pin = None
         self._drag_pin = None
+        self._drag_from_note = None
+        self._drag_from_note_pos = None
+
+    def _pin_or_spawn(self, note, scene_pos):
+        """Return the pin on ``note`` at (or near) ``scene_pos``, else spawn one.
+
+        "Near" = within the pin's hit radius (11 px), so a user who releases
+        the drag slightly off a pin still reuses it instead of spawning a
+        duplicate on top of it.  Coordinates are converted to note-local.
+        """
+        # 1. Reuse a nearby pin of this note, if any.
+        for pin in note.pins:
+            d = (pin.scenePos() - scene_pos).manhattanLength()
+            if d <= 11:
+                return pin
+
+        # 2. Otherwise spawn a new pin at the release point.
+        local = note.mapFromScene(scene_pos)
+        r = note.rect()
+        x = min(max(local.x(), 0.0), r.width())
+        y = min(max(local.y(), 0.0), r.height())
+        pin = note.add_pin(x, y)
+        return pin
 
     # ------------------------------------------------------ Kontextmenüs
 
